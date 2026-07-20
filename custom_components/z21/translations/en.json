@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add Z21",
+        "description": "Enter the IP address of your Z21 command station. The UDP port is fixed at 21105.",
+        "data": {
+          "host": "Host"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect. Check the IP address and that the Z21 is reachable on the network.",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This Z21 is already configured."
+    }
+  }
+}

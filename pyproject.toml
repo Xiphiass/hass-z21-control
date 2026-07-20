@@ -7,7 +7,11 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+# pytest-homeassistant-custom-component pulls in homeassistant + voluptuous +
+# pytest-asyncio, needed only to exercise the HA config flow. Runtime deps stay
+# empty. The pure protocol/client suites remain HA-free.
+dev = ["pytest>=7.0", "pytest-homeassistant-custom-component>=0.13.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
