@@ -1,9 +1,12 @@
 """Binary sensor platform for the Z21 integration.
 
-v1 ships one binary sensor — **track voltage off** — driven by the System State
-push (spec 2.18). It uses device_class ``power`` with inverted semantics so HA
-shows *on = track powered*. The entity list is description-driven so the other
-Central State flags (short circuit, emergency stop) are additive later.
+The Central State flags from the System State push (spec 2.18) exposed as binary
+sensors. **Track voltage off** uses device_class ``power`` with inverted
+semantics so HA shows *on = track powered*. The operational-fault flags
+(emergency stop, short circuit, over-temperature, power lost) use device_class
+``problem`` with straight semantics (*on = fault*); programming-mode-active is a
+diagnostic sensor with no device_class. The entity list is description-driven, so
+adding a flag is a single tuple entry.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntityDescription,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -42,6 +46,36 @@ BINARY_SENSORS: tuple[Z21BinarySensorDescription, ...] = (
         device_class=BinarySensorDeviceClass.POWER,
         # Inverted: on = track powered, off = track voltage off.
         is_on_fn=lambda state: not state.track_voltage_off,
+    ),
+    Z21BinarySensorDescription(
+        key="emergency_stop",
+        translation_key="emergency_stop",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        is_on_fn=lambda state: state.emergency_stop,
+    ),
+    Z21BinarySensorDescription(
+        key="short_circuit",
+        translation_key="short_circuit",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        is_on_fn=lambda state: state.short_circuit,
+    ),
+    Z21BinarySensorDescription(
+        key="over_temperature",
+        translation_key="over_temperature",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        is_on_fn=lambda state: state.high_temperature,
+    ),
+    Z21BinarySensorDescription(
+        key="power_lost",
+        translation_key="power_lost",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        is_on_fn=lambda state: state.power_lost,
+    ),
+    Z21BinarySensorDescription(
+        key="programming_mode",
+        translation_key="programming_mode",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        is_on_fn=lambda state: state.programming_mode_active,
     ),
 )
 
