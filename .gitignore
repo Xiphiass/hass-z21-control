@@ -1,3 +1,10 @@
 .claude/
 REQUIREMENTS.md
-z21-lan-protocal.md
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
