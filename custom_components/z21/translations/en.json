@@ -21,6 +21,21 @@
     "binary_sensor": {
       "track_voltage_off": {
         "name": "Track voltage off"
+      },
+      "emergency_stop": {
+        "name": "Emergency stop"
+      },
+      "short_circuit": {
+        "name": "Short circuit"
+      },
+      "over_temperature": {
+        "name": "Over-temperature"
+      },
+      "power_lost": {
+        "name": "Power lost"
+      },
+      "programming_mode": {
+        "name": "Programming mode"
       }
     },
     "sensor": {
