@@ -45,12 +45,21 @@ def _hwinfo_response(hw: int, fw: int) -> bytes:
     return protocol.build_frame(protocol.HDR_HWINFO, struct.pack("<II", hw, fw))
 
 
-def _install_client(monkeypatch, *, responder) -> None:
-    """Patch the flow's ``Z21Client`` with one whose ``open`` fakes the socket.
+def _system_state_response() -> bytes:
+    electrical = struct.pack("<hhhhHH", 0, 0, 0, 20, 15000, 15000)
+    return protocol.build_frame(
+        protocol.HDR_SYSTEMSTATE_DATACHANGED, electrical + bytes(4)
+    )
 
-    ``responder(header, client)`` is called after each send (as by the real
-    Z21) and may feed scripted datagrams via ``client._on_datagram``. A
-    ``None`` responder simulates a Z21 that never answers -> ``Z21Timeout``.
+
+def _install_client(monkeypatch, *, responder) -> None:
+    """Patch the ``Z21Client`` used by the flow *and* entry setup with a fake.
+
+    A successful flow triggers ``async_setup_entry``, which opens its own live
+    client, so both module references are patched. ``responder(header, client)``
+    is called after each send (as by the real Z21) and may feed scripted
+    datagrams via ``client._on_datagram``. A ``None`` responder simulates a Z21
+    that never answers -> ``Z21Timeout``.
     """
 
     class _FakeClient(Z21Client):
@@ -62,6 +71,8 @@ def _install_client(monkeypatch, *, responder) -> None:
     monkeypatch.setattr(
         "custom_components.z21.config_flow.Z21Client", _FakeClient
     )
+    monkeypatch.setattr("custom_components.z21.Z21Client", _FakeClient)
+    monkeypatch.setattr("custom_components.z21.coordinator._STATE_TIMEOUT", 0.2)
     # Keep the flow's validation budget tiny so the fail-fast test is quick.
     monkeypatch.setattr("custom_components.z21.config_flow._CONNECT_TIMEOUT", 0.05)
     monkeypatch.setattr("custom_components.z21.config_flow._CONNECT_RETRIES", 1)
@@ -93,6 +104,9 @@ def _answering_responder(serial: int, hw: int, fw: int):
             client._on_datagram(_serial_response(serial))
         elif header == protocol.HDR_HWINFO:
             client._on_datagram(_hwinfo_response(hw, fw))
+        elif header == protocol.HDR_SYSTEMSTATE_GETDATA:
+            # The created entry's coordinator polls System State on setup.
+            client._on_datagram(_system_state_response())
 
     return responder
 

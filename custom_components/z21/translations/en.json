@@ -16,5 +16,12 @@
     "abort": {
       "already_configured": "This Z21 is already configured."
     }
+  },
+  "entity": {
+    "binary_sensor": {
+      "track_voltage_off": {
+        "name": "Track voltage off"
+      }
+    }
   }
 }
