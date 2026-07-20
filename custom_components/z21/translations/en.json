@@ -22,6 +22,26 @@
       "track_voltage_off": {
         "name": "Track voltage off"
       }
+    },
+    "sensor": {
+      "main_current": {
+        "name": "Main track current"
+      },
+      "filtered_main_current": {
+        "name": "Filtered main track current"
+      },
+      "prog_current": {
+        "name": "Programming track current"
+      },
+      "temperature": {
+        "name": "Internal temperature"
+      },
+      "supply_voltage": {
+        "name": "Supply voltage"
+      },
+      "track_voltage": {
+        "name": "Track voltage"
+      }
     }
   }
 }
