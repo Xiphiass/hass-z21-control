@@ -125,6 +125,41 @@ def build_set_broadcastflags(flags: int = BROADCAST_FLAG_SYSTEM_STATE) -> bytes:
 
 
 @dataclass(frozen=True)
+class SerialNumber:
+    """Decoded LAN_GET_SERIAL_NUMBER response (2.1)."""
+
+    serial: int  # 32-bit unsigned
+
+
+@dataclass(frozen=True)
+class HwInfo:
+    """Decoded LAN_GET_HWINFO response (2.20).
+
+    ``fw_version`` is kept as the raw 32-bit value (the spec encodes it as BCD);
+    presentation is left to the caller.
+    """
+
+    hw_type: int  # 32-bit unsigned
+    fw_version: int  # 32-bit unsigned
+
+
+def _decode_serial_number(payload: bytes) -> SerialNumber | None:
+    """Decode a serial-number payload; ``None`` if too short to hold one."""
+    if len(payload) < 4:
+        return None
+    (serial,) = struct.unpack_from("<I", payload)
+    return SerialNumber(serial=serial)
+
+
+def _decode_hwinfo(payload: bytes) -> HwInfo | None:
+    """Decode a hardware-info payload; ``None`` if too short to hold one."""
+    if len(payload) < 8:
+        return None
+    hw_type, fw_version = struct.unpack_from("<II", payload)
+    return HwInfo(hw_type=hw_type, fw_version=fw_version)
+
+
+@dataclass(frozen=True)
 class SystemState:
     """Decoded LAN_SYSTEMSTATE_DATACHANGED payload (2.18).
 
@@ -220,16 +255,27 @@ _DISPATCH = {
     HDR_SYSTEMSTATE_DATACHANGED: _decode_system_state,
 }
 
+# Full receive dispatch for transport clients: the header-keyed table the async
+# client decodes and routes on (ADR-0001 receive seam). A superset of _DISPATCH
+# so parse_datagram's SystemState-only contract stays unchanged. Adding a
+# control-related inbound message later is one new entry here plus its decoder.
+RECEIVE_DISPATCH = {
+    HDR_SERIAL_NUMBER: _decode_serial_number,
+    HDR_HWINFO: _decode_hwinfo,
+    HDR_SYSTEMSTATE_DATACHANGED: _decode_system_state,
+}
 
-def parse_datagram(data: bytes) -> list[SystemState]:
-    """Split a UDP payload into datasets and decode the known ones.
 
-    Length-driven and total: walks the buffer dataset by dataset using each
-    ``DataLen``, dispatches on ``Header``, and returns every successfully
-    decoded dataset. Unknown headers, short/malformed datasets, and older
-    firmware payloads are skipped — this never raises on bad input.
+def split_datasets(data: bytes) -> list[tuple[int, bytes]]:
+    """Split a UDP payload into ``(header, payload)`` datasets — framing only.
+
+    The length-driven walk shared by every receive path: steps dataset by
+    dataset using each ``DataLen`` and returns the raw ``(Header, Data)`` pairs
+    without decoding or dispatching. Malformed framing (``DataLen < 4`` or a
+    length overrunning the buffer) stops the walk; a trailing partial byte is
+    ignored. Never raises on bad input.
     """
-    results: list[SystemState] = []
+    datasets: list[tuple[int, bytes]] = []
     offset = 0
     total = len(data)
 
@@ -241,13 +287,27 @@ def parse_datagram(data: bytes) -> list[SystemState]:
 
         header = int.from_bytes(data[offset + 2 : offset + 4], "little")
         payload = data[offset + 4 : offset + data_len]
+        datasets.append((header, payload))
 
+        offset += data_len
+
+    return datasets
+
+
+def parse_datagram(data: bytes) -> list[SystemState]:
+    """Split a UDP payload into datasets and decode the known ones.
+
+    Length-driven and total: walks the buffer via :func:`split_datasets`,
+    dispatches on ``Header``, and returns every successfully decoded dataset.
+    Unknown headers, short/malformed datasets, and older firmware payloads are
+    skipped — this never raises on bad input.
+    """
+    results: list[SystemState] = []
+    for header, payload in split_datasets(data):
         decoder = _DISPATCH.get(header)
         if decoder is not None:
             decoded = decoder(payload)
             if decoded is not None:
                 results.append(decoded)
-
-        offset += data_len
 
     return results
