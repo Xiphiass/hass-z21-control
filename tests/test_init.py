@@ -9,6 +9,7 @@ System State poll, feeds back a ``LAN_SYSTEMSTATE_DATACHANGED`` datagram.
 
 from __future__ import annotations
 
+import asyncio
 import struct
 
 from homeassistant.config_entries import ConfigEntryState
@@ -71,18 +72,29 @@ class _FakeTransport:
         self.closed = True
 
 
-def _responder(*, answer_state: bool, central_state: int = 0):
-    """Answer the handshake; optionally answer System State polls."""
+class _Responder:
+    """Answers the handshake; answers System State polls while ``answer_state``.
 
-    def responder(header, client):
+    Mutable so a single loaded entry can be driven through silence (flip
+    ``answer_state`` off) and recovery (flip it back on).
+    """
+
+    def __init__(self, *, answer_state: bool, central_state: int = 0) -> None:
+        self.answer_state = answer_state
+        self.central_state = central_state
+
+    def __call__(self, header, client) -> None:
         if header == protocol.HDR_SERIAL_NUMBER:
             client._on_datagram(_serial_response(_SERIAL))
         elif header == protocol.HDR_HWINFO:
             client._on_datagram(_hwinfo_response(_HW_TYPE, _FW_VERSION))
-        elif header == protocol.HDR_SYSTEMSTATE_GETDATA and answer_state:
-            client._on_datagram(_system_state(central_state))
+        elif header == protocol.HDR_SYSTEMSTATE_GETDATA and self.answer_state:
+            client._on_datagram(_system_state(self.central_state))
 
-    return responder
+
+def _responder(*, answer_state: bool, central_state: int = 0) -> _Responder:
+    """Answer the handshake; optionally answer System State polls."""
+    return _Responder(answer_state=answer_state, central_state=central_state)
 
 
 def _install_client(monkeypatch, *, responder) -> list[_FakeTransport]:
@@ -103,8 +115,10 @@ def _install_client(monkeypatch, *, responder) -> list[_FakeTransport]:
 
     monkeypatch.setattr("custom_components.z21.Z21Client", _FakeClient)
     # The fake responder answers the handshake immediately, so connect returns
-    # on its first attempt; only the System State wait needs shrinking.
+    # on its first attempt; only the System State wait needs shrinking. Shrink
+    # the staleness window too so the liveness tests can sleep past it (issue #8).
     monkeypatch.setattr("custom_components.z21.coordinator._STATE_TIMEOUT", 0.2)
+    monkeypatch.setattr("custom_components.z21.coordinator.STALENESS_WINDOW", 0.5)
     return transports
 
 
@@ -209,3 +223,92 @@ async def test_unload_closes_client(hass: HomeAssistant, monkeypatch) -> None:
 
     assert entry.state is ConfigEntryState.NOT_LOADED
     assert transports[0].closed
+    # A clean disconnect sends LAN_LOGOFF before tearing the socket down.
+    assert protocol.build_frame(protocol.HDR_LOGOFF) in transports[0].sent
+
+
+def _coordinator(hass: HomeAssistant):
+    """The single loaded coordinator, for driving polls via async_refresh."""
+    return next(iter(hass.data[DOMAIN].values()))
+
+
+async def test_missed_poll_within_window_stays_available(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """A single silent poll within the staleness window keeps entities available."""
+    responder = _responder(answer_state=True)
+    transports = _install_client(monkeypatch, responder=responder)
+    entry = _mock_entry()
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    entity_id = _track_voltage_entity_id(hass)
+    assert hass.states.get(entity_id).state == "on"
+
+    # Go silent, then poll: the recent setup datagram is within the window.
+    responder.answer_state = False
+    await _coordinator(hass).async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get(entity_id).state != "unavailable"
+
+
+async def test_silence_past_window_marks_unavailable(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """Silence past the staleness window greys out the entities."""
+    responder = _responder(answer_state=True)
+    transports = _install_client(monkeypatch, responder=responder)
+    entry = _mock_entry()
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    entity_id = _track_voltage_entity_id(hass)
+
+    responder.answer_state = False
+    # Sleep past the shrunk staleness window before polling.
+    await asyncio.sleep(0.6)
+    await _coordinator(hass).async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get(entity_id).state == "unavailable"
+
+
+async def test_recovery_resends_broadcast_flags(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """The first datagram after silence re-sends broadcast flags and recovers."""
+    responder = _responder(answer_state=True)
+    transports = _install_client(monkeypatch, responder=responder)
+    entry = _mock_entry()
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    entity_id = _track_voltage_entity_id(hass)
+    broadcast = protocol.build_frame(
+        protocol.HDR_SET_BROADCASTFLAGS,
+        struct.pack("<I", protocol.BROADCAST_FLAG_SYSTEM_STATE),
+    )
+    # One broadcast-flags send at setup.
+    assert transports[0].sent.count(broadcast) == 1
+
+    # Fall past the window into unavailable.
+    responder.answer_state = False
+    await asyncio.sleep(0.6)
+    await _coordinator(hass).async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == "unavailable"
+
+    # Z21 comes back: next poll reply recovers and re-sends the flags.
+    responder.answer_state = True
+    await _coordinator(hass).async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get(entity_id).state != "unavailable"
+    assert transports[0].sent.count(broadcast) == 2

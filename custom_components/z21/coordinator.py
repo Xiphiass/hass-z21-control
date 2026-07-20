@@ -10,8 +10,16 @@ the Z21's push model into a Home Assistant ``DataUpdateCoordinator``:
   via ``async_set_updated_data``.
 - The 30 s poll (``LAN_SYSTEMSTATE_GETDATA``, spec 2.19) doubles as a keepalive
   and a staleness detector: its reply *is* a ``LAN_SYSTEMSTATE_DATACHANGED``, so
-  it shares the receive path. Silence surfaces as ``UpdateFailed`` (and, via
-  ``async_config_entry_first_refresh``, ``ConfigEntryNotReady`` on setup).
+  it shares the receive path.
+
+Liveness is tracked by the time of the last received datagram (push *or* poll
+reply), not by any single poll's success. A missed poll is tolerated while a
+datagram arrived within the **staleness window** (~2.5× keepalive); only silence
+past that window surfaces as ``UpdateFailed`` (and, via
+``async_config_entry_first_refresh``, ``ConfigEntryNotReady`` on setup), greying
+out the entities. On the first datagram after such a silence the broadcast flags
+are re-sent (they reset on the Z21's logoff/reconnect), so a power-cycled Z21
+recovers without reloading the integration.
 
 This is the first layer with a Home Assistant dependency below the config flow;
 the transport (``client``) and codec (``protocol``) stay HA-free.
@@ -35,11 +43,13 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-# 30 s keepalive per issue #5; also the staleness window (a poll that draws no
-# reply within _STATE_TIMEOUT is a failed update). Module-level so tests can
-# shrink them.
+# 30 s keepalive per issue #5; a poll awaits its reply for _STATE_TIMEOUT.
+# STALENESS_WINDOW (~75 s = 2.5× keepalive, issue #8) is how long the Z21 may go
+# silent before entities are marked unavailable — a single missed poll is
+# tolerated. Module-level so tests can shrink them.
 KEEPALIVE_INTERVAL = 30.0
 _STATE_TIMEOUT = 5.0
+STALENESS_WINDOW = 2.5 * KEEPALIVE_INTERVAL
 
 
 class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
@@ -59,6 +69,12 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         self._unsub: Callable[[], None] | None = None
         # Set while a poll awaits its reply; the receive handler resolves it.
         self._waiter: asyncio.Future[protocol.SystemState] | None = None
+        # Monotonic time of the last received System State (push or poll reply);
+        # None until the first ever datagram. Drives the staleness window.
+        self._last_rx: float | None = None
+        # True while past the staleness window, so the recovery edge (re-send of
+        # broadcast flags on the first datagram after silence) fires exactly once.
+        self._stale: bool = False
 
     async def async_setup(self) -> None:
         """Connect, subscribe to System State broadcasts, and start listening.
@@ -81,6 +97,13 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
             decoded, protocol.SystemState
         ):
             return
+        # Any valid datagram refreshes liveness. If we were stale, this is the
+        # first packet after silence: broadcast flags reset on the Z21's
+        # logoff/reconnect, so re-send them before trusting the push stream.
+        self._last_rx = self.hass.loop.time()
+        if self._stale:
+            self.client.set_broadcastflags()
+            self._stale = False
         waiter = self._waiter
         if waiter is not None and not waiter.done():
             # Reply to an in-flight poll (keepalive / first refresh).
@@ -98,7 +121,15 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
             self.client.request_systemstate()
             return await asyncio.wait_for(waiter, _STATE_TIMEOUT)
         except (asyncio.TimeoutError, TimeoutError) as err:
-            raise UpdateFailed("No System State from Z21 within timeout") from err
+            # A missed poll is tolerated while a datagram arrived within the
+            # staleness window — keep the last known state and stay available.
+            now = self.hass.loop.time()
+            if self._last_rx is not None and now - self._last_rx <= STALENESS_WINDOW:
+                return self.data
+            self._stale = True
+            raise UpdateFailed(
+                "No System State from Z21 within staleness window"
+            ) from err
         finally:
             self._waiter = None
 
