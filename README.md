@@ -21,6 +21,33 @@ v1, though the design leaves room for it later (see
 | Async UDP client | `custom_components/z21/client.py` | ✅ `asyncio.DatagramProtocol` endpoint wrapping the codec; `connect`/`send`/`subscribe`/`close`. Still HA-agnostic. |
 | HA integration (config flow, coordinator, entities) | `custom_components/z21/` | ✅ UI config flow, DataUpdateCoordinator, and `sensor` / `binary_sensor` platforms. |
 
+### Entities exposed
+
+Once configured, the integration subscribes to the command station's **System
+State** broadcast (`local_push`) and exposes it as:
+
+**Sensors** (electrical telemetry)
+
+| Entity | Description |
+| --- | --- |
+| Main current | Current on the main track. |
+| Filtered main current | Smoothed main-track current. |
+| Programming current | Current on the programming track. |
+| Temperature | Command station internal temperature. |
+| Supply voltage | Input supply voltage. |
+| Track voltage | Voltage on the main track. |
+
+**Binary sensors** (Central State flags)
+
+| Entity | On when |
+| --- | --- |
+| Track voltage off | Track power is switched off. |
+| Emergency stop | An emergency stop is active. |
+| Short circuit | A short circuit is detected. |
+| Over temperature | The command station is over temperature. |
+| Power lost | The command station lost power. |
+| Programming mode | The command station is in programming mode. |
+
 ## Installation (HACS custom repository)
 
 This integration is distributed as a **HACS custom repository** (it is not in
@@ -45,7 +72,7 @@ protocol.py   pure codec — bytes <-> decoded datasets (no I/O)
     ▲
 client.py     async UDP transport — one endpoint, symmetric send/receive seam
     ▲
-(future)      HA config flow + coordinator + sensor/binary_sensor platforms
+HA layer      config flow + DataUpdateCoordinator + sensor/binary_sensor platforms
 ```
 
 The client realizes the **symmetric I/O seam** of
