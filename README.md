@@ -7,11 +7,8 @@ Z21, speaking the binary **Z21 LAN protocol** over UDP port 21105.
 
 ## Status
 
-Early development — the transport foundation is in place; Home Assistant
-platforms are not wired up yet.
-
 **v1 is monitor-only** (see [`CONTEXT.md`](CONTEXT.md)): it subscribes to the
-command station's **System State** and will expose it as HA sensors and binary
+command station's **System State** and exposes it as HA sensors and binary
 sensors. No control (loco drive, turnouts, track power, CV programming) ships in
 v1, though the design leaves room for it later (see
 [ADR-0001](docs/adr/0001-symmetric-io-seam.md)).
@@ -22,7 +19,21 @@ v1, though the design leaves room for it later (see
 | --- | --- | --- |
 | Pure protocol codec | `custom_components/z21/protocol.py` | ✅ Message builders + length-driven datagram parser. No `asyncio`, no socket, no HA imports. |
 | Async UDP client | `custom_components/z21/client.py` | ✅ `asyncio.DatagramProtocol` endpoint wrapping the codec; `connect`/`send`/`subscribe`/`close`. Still HA-agnostic. |
-| HA integration (config flow, coordinator, entities) | — | ⛔ Not started. |
+| HA integration (config flow, coordinator, entities) | `custom_components/z21/` | ✅ UI config flow, DataUpdateCoordinator, and `sensor` / `binary_sensor` platforms. |
+
+## Installation (HACS custom repository)
+
+This integration is distributed as a **HACS custom repository** (it is not in
+the default HACS store).
+
+1. In Home Assistant, open **HACS → ⋮ (top-right) → Custom repositories**.
+2. Add the repository URL `https://github.com/Xiphiass/hass-z21-control` with
+   category **Integration**.
+3. Install **Z21** from HACS, then **restart Home Assistant**.
+4. Go to **Settings → Devices & services → Add integration**, search for
+   **Z21**, and enter the command station's host IP (port is fixed at 21105).
+
+Requires Home Assistant **2026.1.0** or newer.
 
 ## Architecture
 

@@ -89,6 +89,12 @@ The HA integration identifier / `custom_components/` folder name is **`z21`**
 not ML-Train-specific — ML-Train MZSpro is one supported station among Roco Z21
 compatibles.
 
+## Distribution (HACS)
+
+The integration is distributed as a **HACS custom repository**: users install it
+by adding the repo URL under HACS → Custom repositories, not by searching the
+default HACS store. Default-store inclusion is explicitly out of scope for now.
+
 ## Scope (v1)
 
 v1 is **monitor-only**: it subscribes to System State and exposes it as HA
