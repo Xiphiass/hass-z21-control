@@ -146,6 +146,16 @@ def build_track_power_on() -> bytes:
     return build_xbus(0x21, b"\x81")
 
 
+def build_set_stop() -> bytes:
+    """LAN_X_SET_STOP (2.13) -> ``06 00 40 00 80 80``.
+
+    Emergency stop: halts all locos but leaves track voltage on (distinct from
+    track-power-off). The X-bus command is the lone X-header ``0x80`` with no
+    data byte, so the XOR checkbyte is ``0x80`` itself.
+    """
+    return build_xbus(0x80)
+
+
 # --- Receive path: decoded datasets -----------------------------------------
 
 

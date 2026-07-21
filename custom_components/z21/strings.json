@@ -62,6 +62,11 @@
       "track_power": {
         "name": "Track power"
       }
+    },
+    "button": {
+      "emergency_stop": {
+        "name": "Emergency stop"
+      }
     }
   }
 }
