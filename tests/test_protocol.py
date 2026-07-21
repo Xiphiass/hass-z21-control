@@ -23,6 +23,7 @@ from custom_components.z21.protocol import (
     build_get_serial_number,
     build_logoff,
     build_set_broadcastflags,
+    build_set_stop,
     build_systemstate_getdata,
     build_track_power_off,
     build_track_power_on,
@@ -80,6 +81,11 @@ def test_track_power_off_exact_bytes():
 def test_track_power_on_exact_bytes():
     # DataLen=0x0007, Header=0x0040, X-Header=0x21, DB0=0x81, XOR=0xA0.
     assert build_track_power_on() == bytes.fromhex("0700400021 81 a0".replace(" ", ""))
+
+
+def test_set_stop_exact_bytes():
+    # DataLen=0x0006, Header=0x0040, X-Header=0x80, XOR=0x80 (no DB0).
+    assert build_set_stop() == bytes.fromhex("060040008080")
 
 
 def test_build_xbus_computes_xor_checkbyte():

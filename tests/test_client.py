@@ -173,6 +173,20 @@ def test_set_track_power_without_transport_raises():
         c.set_track_power_on()
 
 
+def test_emergency_stop_bytes():
+    c = Z21Client("192.0.2.10")
+    t = FakeTransport()
+    c._attach_transport(t)
+    c.emergency_stop()
+    assert t.sent == [protocol.build_set_stop()]
+
+
+def test_emergency_stop_without_transport_raises():
+    c = Z21Client("192.0.2.10")
+    with pytest.raises(RuntimeError):
+        c.emergency_stop()
+
+
 # --- Receive seam -----------------------------------------------------------
 
 

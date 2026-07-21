@@ -195,6 +195,10 @@ class Z21Client:
         """Send LAN_X_SET_TRACK_POWER_OFF (2.5)."""
         self._transport_send(protocol.build_track_power_off())
 
+    def emergency_stop(self) -> None:
+        """Send LAN_X_SET_STOP (2.13) — halt all locos, leave track power on."""
+        self._transport_send(protocol.build_set_stop())
+
     def logoff(self) -> None:
         """Send LAN_LOGOFF (2.2)."""
         self.send(protocol.HDR_LOGOFF)

@@ -7,6 +7,11 @@ A Home Assistant custom integration for Roco/Fleischmann **Z21**-compatible
 command stations, speaking the Z21 LAN protocol over UDP port 21105. **v1 is
 monitor-only** (System State → sensors/binary sensors); no control ships in v1.
 
+## Workflow
+
+- Whenever working on a new feature, pull the latest changes from `main` and create a new branch for your work.
+- You are allowed to push changes and open PRs automatically (via the `gh` CLI) without asking for confirmation first.
+
 ## Architecture
 
 Three layers, each independently testable. The lower two carry **no Home
