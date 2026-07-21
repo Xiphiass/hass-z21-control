@@ -32,6 +32,7 @@ HDR_HWINFO = 0x1A  # LAN_GET_HWINFO (2.20)
 HDR_LOGOFF = 0x30  # LAN_LOGOFF (2.2)
 HDR_SET_BROADCASTFLAGS = 0x50  # LAN_SET_BROADCASTFLAGS (2.16)
 HDR_SYSTEMSTATE_GETDATA = 0x85  # LAN_SYSTEMSTATE_GETDATA (2.19)
+HDR_X = 0x40  # LAN_X (X-bus tunnel; carries e.g. LAN_X_SET_TRACK_POWER_*)
 
 # Inbound (Z21 -> client)
 HDR_SYSTEMSTATE_DATACHANGED = 0x84  # LAN_SYSTEMSTATE_DATACHANGED (2.18)
@@ -119,6 +120,30 @@ def build_set_broadcastflags(flags: int = BROADCAST_FLAG_SYSTEM_STATE) -> bytes:
     ``08 00 50 00 00 01 00 00``.
     """
     return build_frame(HDR_SET_BROADCASTFLAGS, struct.pack("<I", flags))
+
+
+def build_xbus(x_header: int, db: bytes = b"") -> bytes:
+    """Frame an X-bus command under ``HDR_X`` (LAN_X, 5.x).
+
+    The X-bus payload is ``X-Header | DB0.. | XOR-Byte``, where the trailing
+    checkbyte is the XOR of the X-header and every data byte. This is the shared
+    control-send primitive; each LAN_X command is a thin wrapper on it.
+    """
+    xbus = bytes((x_header,)) + db
+    checksum = 0
+    for byte in xbus:
+        checksum ^= byte
+    return build_frame(HDR_X, xbus + bytes((checksum,)))
+
+
+def build_track_power_off() -> bytes:
+    """LAN_X_SET_TRACK_POWER_OFF (2.5) -> ``07 00 40 00 21 80 A1``."""
+    return build_xbus(0x21, b"\x80")
+
+
+def build_track_power_on() -> bytes:
+    """LAN_X_SET_TRACK_POWER_ON (2.6) -> ``07 00 40 00 21 81 A0``."""
+    return build_xbus(0x21, b"\x81")
 
 
 # --- Receive path: decoded datasets -----------------------------------------
