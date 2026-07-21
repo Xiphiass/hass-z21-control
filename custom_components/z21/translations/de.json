@@ -1,0 +1,72 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Z21 hinzufügen",
+        "description": "Geben Sie die IP-Adresse Ihrer Z21-Kommandozentrale ein. Der UDP-Port ist fest auf 21105 eingestellt.",
+        "data": {
+          "host": "Host"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung fehlgeschlagen. Überprüfen Sie die IP-Adresse und ob die Z21 im Netzwerk erreichbar ist.",
+      "unknown": "Unerwarteter Fehler"
+    },
+    "abort": {
+      "already_configured": "Diese Z21 ist bereits konfiguriert."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "track_voltage_off": {
+        "name": "Gleisspannung aus"
+      },
+      "emergency_stop": {
+        "name": "Nothalt"
+      },
+      "short_circuit": {
+        "name": "Kurzschluss"
+      },
+      "over_temperature": {
+        "name": "Übertemperatur"
+      },
+      "power_lost": {
+        "name": "Stromausfall"
+      },
+      "programming_mode": {
+        "name": "Programmiermodus"
+      }
+    },
+    "sensor": {
+      "main_current": {
+        "name": "Hauptgleisstrom"
+      },
+      "filtered_main_current": {
+        "name": "Gefilterter Hauptgleisstrom"
+      },
+      "prog_current": {
+        "name": "Programmiergleisstrom"
+      },
+      "temperature": {
+        "name": "Innentemperatur"
+      },
+      "supply_voltage": {
+        "name": "Versorgungsspannung"
+      },
+      "track_voltage": {
+        "name": "Gleisspannung"
+      }
+    },
+    "switch": {
+      "track_power": {
+        "name": "Gleisspannung"
+      }
+    },
+    "button": {
+      "emergency_stop": {
+        "name": "Nothalt"
+      }
+    }
+  }
+}
