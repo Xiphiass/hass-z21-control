@@ -110,10 +110,12 @@ the shared `0x40` X-bus header:
 
 ## Scope (v1)
 
-v1 is **monitor-only**: it subscribes to System State and exposes it as HA
-sensors + binary sensors. No control (loco drive, turnouts, track power,
-CV programming) ships in v1, though the design leaves room for it later (see
-ADR-0001, the symmetric I/O seam).
+v1 **monitors and controls the central station**: it subscribes to System State
+and exposes it as HA sensors + binary sensors, and ships the station-wide
+central-controller controls (a track-power switch and an emergency-stop button;
+see "Central controller controls" above). Finer-grained control — loco drive,
+turnouts, CV programming — stays out of scope, though the design leaves room for
+it later (see ADR-0001, the symmetric I/O seam).
 
 Fixed behaviours (not user-configurable in v1): keepalive interval **30s**,
 staleness window **2.5× keepalive (~75s)**, UDP port **21105**. No options flow.

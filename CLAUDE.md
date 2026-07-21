@@ -4,8 +4,10 @@ Guidance for AI agents working in this repo. Human-facing overview lives in
 ## What this is
 
 A Home Assistant custom integration for Roco/Fleischmann **Z21**-compatible
-command stations, speaking the Z21 LAN protocol over UDP port 21105. **v1 is
-monitor-only** (System State → sensors/binary sensors); no control ships in v1.
+command stations, speaking the Z21 LAN protocol over UDP port 21105. It monitors
+System State (→ sensors/binary sensors) and ships the station-wide
+central-controller controls — a track-power switch and an emergency-stop button.
+Per-loco, turnout, and CV control remain out of scope.
 
 ## Workflow
 
@@ -24,8 +26,9 @@ Assistant dependency** — keep it that way:
   `asyncio.DatagramProtocol` endpoint wrapping the codec; `connect` / `send` /
   `subscribe` / `close`. Still HA-agnostic (no `socket`/`homeassistant` imports —
   a test enforces this; `asyncio` is allowed).
-- HA integration (config flow, coordinator, entity platforms) — **not built
-  yet**.
+- HA integration — **config flow, coordinator, and entity platforms**
+  (`sensor` / `binary_sensor` / `switch` / `button`). Carries the HA dependency;
+  builds on the two layers below.
 
 Both layers honor the **symmetric I/O seam** of
 [`docs/adr/0001-symmetric-io-seam.md`](docs/adr/0001-symmetric-io-seam.md): a
