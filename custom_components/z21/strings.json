@@ -57,6 +57,11 @@
       "track_voltage": {
         "name": "Track voltage"
       }
+    },
+    "switch": {
+      "track_power": {
+        "name": "Track power"
+      }
     }
   }
 }

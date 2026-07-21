@@ -151,6 +151,28 @@ def test_set_broadcastflags_default_bytes():
     assert t.sent == [protocol.build_set_broadcastflags()]
 
 
+def test_set_track_power_on_bytes():
+    c = Z21Client("192.0.2.10")
+    t = FakeTransport()
+    c._attach_transport(t)
+    c.set_track_power_on()
+    assert t.sent == [protocol.build_track_power_on()]
+
+
+def test_set_track_power_off_bytes():
+    c = Z21Client("192.0.2.10")
+    t = FakeTransport()
+    c._attach_transport(t)
+    c.set_track_power_off()
+    assert t.sent == [protocol.build_track_power_off()]
+
+
+def test_set_track_power_without_transport_raises():
+    c = Z21Client("192.0.2.10")
+    with pytest.raises(RuntimeError):
+        c.set_track_power_on()
+
+
 # --- Receive seam -----------------------------------------------------------
 
 

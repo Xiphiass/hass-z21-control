@@ -161,9 +161,13 @@ class Z21Client:
 
     def send(self, header: int, payload: bytes = b"") -> None:
         """Frame and send ``payload`` under ``header`` — the send primitive."""
+        self._transport_send(protocol.build_frame(header, payload))
+
+    def _transport_send(self, frame: bytes) -> None:
+        """Send a complete framed datagram — the single transport touch point."""
         if self._transport is None:
             raise RuntimeError("Z21Client endpoint not open")
-        self._transport.sendto(protocol.build_frame(header, payload))
+        self._transport.sendto(frame)
 
     def request_serial_number(self) -> None:
         """Send LAN_GET_SERIAL_NUMBER (2.1)."""
@@ -182,6 +186,14 @@ class Z21Client:
     ) -> None:
         """Send LAN_SET_BROADCASTFLAGS (2.16), defaulting to system state."""
         self.send(protocol.HDR_SET_BROADCASTFLAGS, struct.pack("<I", flags))
+
+    def set_track_power_on(self) -> None:
+        """Send LAN_X_SET_TRACK_POWER_ON (2.6)."""
+        self._transport_send(protocol.build_track_power_on())
+
+    def set_track_power_off(self) -> None:
+        """Send LAN_X_SET_TRACK_POWER_OFF (2.5)."""
+        self._transport_send(protocol.build_track_power_off())
 
     def logoff(self) -> None:
         """Send LAN_LOGOFF (2.2)."""

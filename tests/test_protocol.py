@@ -24,6 +24,9 @@ from custom_components.z21.protocol import (
     build_logoff,
     build_set_broadcastflags,
     build_systemstate_getdata,
+    build_track_power_off,
+    build_track_power_on,
+    build_xbus,
     parse_datagram,
 )
 
@@ -64,6 +67,26 @@ def test_build_frame_prepends_len_and_header():
     frame = build_frame(0x84, b"\xaa\xbb")
     # DataLen = 2 payload + 4 framing = 6.
     assert frame == bytes.fromhex("06008400") + b"\xaa\xbb"
+
+
+# --- X-bus control builders --------------------------------------------------
+
+
+def test_track_power_off_exact_bytes():
+    # DataLen=0x0007, Header=0x0040, X-Header=0x21, DB0=0x80, XOR=0xA1.
+    assert build_track_power_off() == bytes.fromhex("0700400021 80 a1".replace(" ", ""))
+
+
+def test_track_power_on_exact_bytes():
+    # DataLen=0x0007, Header=0x0040, X-Header=0x21, DB0=0x81, XOR=0xA0.
+    assert build_track_power_on() == bytes.fromhex("0700400021 81 a0".replace(" ", ""))
+
+
+def test_build_xbus_computes_xor_checkbyte():
+    # XOR over X-header 0x21 and DB0 0x80 -> 0xA1.
+    frame = build_xbus(0x21, b"\x80")
+    assert frame[-1] == 0x21 ^ 0x80
+    assert frame == build_frame(protocol.HDR_X, b"\x21\x80\xa1")
 
 
 # --- System State decoding ---------------------------------------------------

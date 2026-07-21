@@ -95,6 +95,19 @@ The integration is distributed as a **HACS custom repository**: users install it
 by adding the repo URL under HACS → Custom repositories, not by searching the
 default HACS store. Default-store inclusion is explicitly out of scope for now.
 
+## Central controller controls
+
+Station-wide power/stop commands — the first **control** surface, distinct from
+per-loco/turnout/CV control (still out of scope). Three Z21 LAN commands, all on
+the shared `0x40` X-bus header:
+
+- **Track power** — `LAN_X_SET_TRACK_POWER_ON` (2.6) / `LAN_X_SET_TRACK_POWER_OFF`
+  (2.5). Modeled as one HA **`switch`** (on = power on, off = power off).
+  `TRACK_POWER_ON` also clears an active emergency stop and programming mode.
+- **Emergency stop** — `LAN_X_SET_STOP` (2.13). Halts all locos but **leaves
+  track voltage on** (distinct from track-power-off). Modeled as an HA
+  **`button`** (momentary, stateless).
+
 ## Scope (v1)
 
 v1 is **monitor-only**: it subscribes to System State and exposes it as HA
