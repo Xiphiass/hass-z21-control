@@ -7,11 +7,14 @@ Z21, speaking the binary **Z21 LAN protocol** over UDP port 21105.
 
 ## Status
 
-**v1 is monitor-only** (see [`CONTEXT.md`](CONTEXT.md)): it subscribes to the
-command station's **System State** and exposes it as HA sensors and binary
-sensors. No control (loco drive, turnouts, track power, CV programming) ships in
-v1, though the design leaves room for it later (see
-[ADR-0001](docs/adr/0001-symmetric-io-seam.md)).
+**v1 monitors and controls the central station** (see [`CONTEXT.md`](CONTEXT.md)):
+it subscribes to the command station's **System State** and exposes it as HA
+sensors and binary sensors, and ships the station-wide central-controller
+controls — a track-power switch and an emergency-stop button. Finer-grained
+control (loco drive, turnouts, CV programming) does not ship in v1, though the
+design leaves room for it later (see
+[ADR-0001](docs/adr/0001-symmetric-io-seam.md); control feedback is covered by
+[ADR-0002](docs/adr/0002-control-feedback-via-system-state.md)).
 
 ### What exists today
 
@@ -19,7 +22,7 @@ v1, though the design leaves room for it later (see
 | --- | --- | --- |
 | Pure protocol codec | `custom_components/z21/protocol.py` | ✅ Message builders + length-driven datagram parser. No `asyncio`, no socket, no HA imports. |
 | Async UDP client | `custom_components/z21/client.py` | ✅ `asyncio.DatagramProtocol` endpoint wrapping the codec; `connect`/`send`/`subscribe`/`close`. Still HA-agnostic. |
-| HA integration (config flow, coordinator, entities) | `custom_components/z21/` | ✅ UI config flow, DataUpdateCoordinator, and `sensor` / `binary_sensor` platforms. |
+| HA integration (config flow, coordinator, entities) | `custom_components/z21/` | ✅ UI config flow, DataUpdateCoordinator, and `sensor` / `binary_sensor` / `switch` / `button` platforms. |
 
 ### Entities exposed
 
@@ -48,6 +51,13 @@ State** broadcast (`local_push`) and exposes it as:
 | Power lost | The command station lost power. |
 | Programming mode | The command station is in programming mode. |
 
+**Controls** (central-controller commands)
+
+| Entity | Type | Action |
+| --- | --- | --- |
+| Track power | `switch` | Turns track power on/off (on also clears an active emergency stop and programming mode). Reflects the live track-voltage state. |
+| Emergency stop | `button` | Halts all locomotives while leaving track voltage on. |
+
 ## Installation (HACS custom repository)
 
 This integration is distributed as a **HACS custom repository** (it is not in
@@ -72,16 +82,18 @@ protocol.py   pure codec — bytes <-> decoded datasets (no I/O)
     ▲
 client.py     async UDP transport — one endpoint, symmetric send/receive seam
     ▲
-HA layer      config flow + DataUpdateCoordinator + sensor/binary_sensor platforms
+HA layer      config flow + DataUpdateCoordinator + sensor/binary_sensor/switch/button platforms
 ```
 
 The client realizes the **symmetric I/O seam** of
 [ADR-0001](docs/adr/0001-symmetric-io-seam.md):
 
 - **Send path** — a general `send(header, payload)` primitive over the single UDP
-  endpoint. v1's outbound messages (`request_serial_number`, `request_hwinfo`,
-  `request_systemstate`, `set_broadcastflags`, `logoff`) are thin wrappers on it;
-  future control commands are new wrappers on the same seam.
+  endpoint. Outbound messages — monitor requests (`request_serial_number`,
+  `request_hwinfo`, `request_systemstate`, `set_broadcastflags`, `logoff`) and
+  the shipped controls (`set_track_power_on`, `set_track_power_off`,
+  `emergency_stop`) — are all thin wrappers on it; further control commands are
+  new wrappers on the same seam.
 - **Receive path** — inbound datagrams are split (`protocol.split_datasets`),
   decoded by `Header` through `protocol.RECEIVE_DISPATCH`, and dispatched to
   handlers registered via `subscribe(handler)`. Adding a control-related inbound

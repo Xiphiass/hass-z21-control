@@ -1,8 +1,9 @@
 """Z21 command station integration for Home Assistant.
 
-v1 is monitor-only: setup opens a live :class:`Z21Client`, registers the Z21 as a
-single HA Device, and runs a System State coordinator that feeds the binary
-sensor platform. Control commands land in later issues on the same I/O seam.
+Setup opens a live :class:`Z21Client`, registers the Z21 as a single HA Device,
+and runs a System State coordinator that feeds the binary sensor, sensor, switch,
+and button platforms. Alongside monitoring, the first station-wide controls (a
+track-power switch and an emergency-stop button) send on the same I/O seam.
 """
 
 from __future__ import annotations
