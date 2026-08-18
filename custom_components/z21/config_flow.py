@@ -13,7 +13,12 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_HOST
 
 from .client import Z21Client, Z21Timeout
@@ -126,3 +131,112 @@ class Z21ConfigFlow(ConfigFlow, domain=DOMAIN):
             )
         finally:
             await client.close()
+
+
+class Z21OptionsFlow(OptionsFlow):
+    """Handle options for the Z21 config entry."""
+
+    def __init__(self, entry: ConfigEntry) -> None:
+        self.entry = entry
+        self._turnouts: list[dict] = list(entry.options.get(CONF_TURNOUTS, []))
+        self._edit_index: int | None = None
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Show the list of configured turnouts with add/edit/delete actions."""
+        if user_input is not None:
+            action = user_input["action"]
+            if action == "add":
+                return await self.async_step_add_turnout()
+            if action.startswith("edit_"):
+                idx = int(action.replace("edit_", ""))
+                self._edit_index = idx
+                return await self.async_step_edit_turnout()
+            if action.startswith("delete_"):
+                idx = int(action.replace("delete_", ""))
+                self._turnouts.pop(idx)
+                return await self.async_step_init()
+
+        items: list[str] = []
+        for i, t in enumerate(self._turnouts):
+            label = f"{t[CONF_TURNOUT_NAME]} (FAdr {t[CONF_TURNOUT_FADR]})"
+            items.append(f"{i}. {label}")
+        if not items:
+            items.append("No turnouts configured.")
+
+        actions: list[str] = ["add"]
+        for i in range(len(self._turnouts)):
+            actions.append(f"edit_{i}")
+            actions.append(f"delete_{i}")
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({
+                vol.Optional("action"): vol.In(actions),
+            }),
+            description_placeholders={"turnouts": "\n".join(items)},
+        )
+
+    async def async_step_add_turnout(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Add a new turnout."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                validated = TURNOUT_SCHEMA([user_input])
+                self._turnouts.append(validated[0])
+                return self.async_create_entry(data=self._save_options())
+            except vol.Invalid as err:
+                errors["base"] = str(err)
+
+        return self.async_show_form(
+            step_id="add_turnout",
+            data_schema=TURNOUT_SCHEMA,
+            errors=errors,
+        )
+
+    async def async_step_edit_turnout(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Edit an existing turnout."""
+        errors: dict[str, str] = {}
+        if self._edit_index is None:
+            return await self.async_step_init()
+
+        current = self._turnouts[self._edit_index]
+
+        if user_input is not None:
+            try:
+                # Build full list with edited item, validate uniqueness across all
+                test_list = list(self._turnouts)
+                test_list[self._edit_index] = user_input
+                validated = TURNOUT_SCHEMA(test_list)
+                self._turnouts[self._edit_index] = validated[self._edit_index]
+                return self.async_create_entry(data=self._save_options())
+            except vol.Invalid as err:
+                errors["base"] = str(err)
+
+        schema = vol.Schema({
+            vol.Required(CONF_TURNOUT_NAME, default=current[CONF_TURNOUT_NAME]): str,
+            vol.Required(CONF_TURNOUT_FADR, default=current[CONF_TURNOUT_FADR]): vol.All(
+                vol.Coerce(int),
+                vol.Range(min=TURNOUT_FADR_MIN, max=TURNOUT_FADR_MAX),
+            ),
+            vol.Optional(CONF_TURNOUT_Q_MODE, default=current.get(CONF_TURNOUT_Q_MODE, 0)): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=3),
+            ),
+        })
+
+        return self.async_show_form(
+            step_id="edit_turnout",
+            data_schema=schema,
+            errors=errors,
+        )
+
+    def _save_options(self) -> dict[str, Any]:
+        """Build the options dict from the current turnout list."""
+        data: dict[str, Any] = dict(self.entry.options)
+        data[CONF_TURNOUTS] = self._turnouts
+        return data
