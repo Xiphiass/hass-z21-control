@@ -58,11 +58,11 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
     def __init__(
         self, hass: HomeAssistant, entry: ConfigEntry, client: Z21Client
     ) -> None:
+        self.config_entry = entry
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            config_entry=entry,
             update_interval=timedelta(seconds=KEEPALIVE_INTERVAL),
         )
         self.client = client
@@ -75,6 +75,8 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         # True while past the staleness window, so the recovery edge (re-send of
         # broadcast flags on the first datagram after silence) fires exactly once.
         self._stale: bool = False
+        # Maps turnout index (int) to position (int: 0=closed/straight, 1=diverged/curved, None=not switched yet).
+        self._turnout_positions: dict[int, int | None] = {}
 
     async def async_setup(self) -> None:
         """Connect, subscribe to System State broadcasts, and start listening.
@@ -88,29 +90,38 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
             raise ConfigEntryNotReady(
                 f"Z21 handshake failed: {err}"
             ) from err
-        self.client.set_broadcastflags()
+        self.client.set_broadcastflags(
+            protocol.BROADCAST_FLAG_SYSTEM_STATE
+            | protocol.BROADCAST_FLAG_DRIVING_SWITCHING
+        )
         self._unsub = self.client.subscribe(self._handle_message)
 
     def _handle_message(self, header: int, decoded: object) -> None:
-        """Route a decoded dataset; only System State is relevant here."""
-        if header != protocol.HDR_SYSTEMSTATE_DATACHANGED or not isinstance(
+        """Route a decoded dataset; System State updates entities, TurnoutInfo updates positions."""
+        if header == protocol.HDR_SYSTEMSTATE_DATACHANGED and isinstance(
             decoded, protocol.SystemState
         ):
-            return
-        # Any valid datagram refreshes liveness. If we were stale, this is the
-        # first packet after silence: broadcast flags reset on the Z21's
-        # logoff/reconnect, so re-send them before trusting the push stream.
-        self._last_rx = self.hass.loop.time()
-        if self._stale:
-            self.client.set_broadcastflags()
-            self._stale = False
-        waiter = self._waiter
-        if waiter is not None and not waiter.done():
-            # Reply to an in-flight poll (keepalive / first refresh).
-            waiter.set_result(decoded)
-        else:
-            # Unsolicited broadcast — push straight to entities.
-            self.async_set_updated_data(decoded)
+            self._last_rx = self.hass.loop.time()
+            if self._stale:
+                self.client.set_broadcastflags(
+                    protocol.BROADCAST_FLAG_SYSTEM_STATE
+                    | protocol.BROADCAST_FLAG_DRIVING_SWITCHING
+                )
+                self._stale = False
+            waiter = self._waiter
+            if waiter is not None and not waiter.done():
+                waiter.set_result(decoded)
+            else:
+                self.async_set_updated_data(decoded)
+        elif header == protocol.HDR_TURNOUT_INFO and isinstance(
+            decoded, protocol.TurnoutInfo
+        ):
+            self._turnout_positions[decoded.fadr] = decoded.position
+
+    @property
+    def turnout_positions(self) -> dict[int, int | None]:
+        """Return a copy of the last known turnout positions (FAdr -> position)."""
+        return dict(self._turnout_positions)
 
     async def _async_update_data(self) -> protocol.SystemState:
         """Poll for System State, awaiting the pushed reply within the window."""
