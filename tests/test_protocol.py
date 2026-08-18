@@ -15,9 +15,11 @@ from custom_components.z21 import protocol
 from custom_components.z21.protocol import (
     BROADCAST_FLAG_SYSTEM_STATE,
     HDR_SYSTEMSTATE_DATACHANGED,
+    HDR_TURNOUT_INFO,
     CentralState,
     CentralStateEx,
     SystemState,
+    TurnoutInfo,
     build_frame,
     build_get_hwinfo,
     build_get_serial_number,
@@ -27,8 +29,11 @@ from custom_components.z21.protocol import (
     build_systemstate_getdata,
     build_track_power_off,
     build_track_power_on,
+    build_turnout_info_get,
+    build_turnout_set,
     build_xbus,
     parse_datagram,
+    _decode_turnout_info,
 )
 
 
@@ -93,6 +98,18 @@ def test_build_xbus_computes_xor_checkbyte():
     frame = build_xbus(0x21, b"\x80")
     assert frame[-1] == 0x21 ^ 0x80
     assert frame == build_frame(protocol.HDR_X, b"\x21\x80\xa1")
+
+
+def test_turnout_info_get_fadr_4_exact_bytes():
+    assert build_turnout_info_get(4) == bytes.fromhex("0800400043000447")
+
+
+def test_turnout_info_get_fadr_0_exact_bytes():
+    assert build_turnout_info_get(0) == bytes.fromhex("0800400043000043")
+
+
+def test_turnout_info_get_fadr_65534_exact_bytes():
+    assert build_turnout_info_get(65534) == bytes.fromhex("0800400043FFFE42")
 
 
 # --- System State decoding ---------------------------------------------------

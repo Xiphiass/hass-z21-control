@@ -157,6 +157,45 @@ def build_set_stop() -> bytes:
     return build_xbus(0x80)
 
 
+def build_turnout_info_get(fadr: int) -> bytes:
+    """LAN_X_GET_TURNOUT_INFO request (5.1).
+
+    Polls the position of a turnout by its function address.
+    ``fadr`` is the raw FAdr value (e.g. 0, 4, 9, ...).
+
+    Example for FAdr=4::
+
+        08 00 40 00 43 00 04 47
+
+    """
+    fadr_ms = (fadr >> 8) & 0xFF
+    fadr_ls = fadr & 0xFF
+    return build_xbus(0x43, bytes((fadr_ms, fadr_ls)))
+
+
+def build_turnout_set(fadr: int, position: int, q: bool = False) -> bytes:
+    """LAN_X_SET_TURNOUT command (5.2).
+
+    Switches a turnout by its function address.
+
+    Args:
+        fadr: Raw function address (0–65534).
+        position: 0 = output 1 (deactivate), 1 = output 2 (activate).
+        q: If True, queue mode (Z21 FW 1.24+).
+
+    Example for FAdr=4, position=1 (activate, output 2), Q=0::
+
+        09 00 40 00 53 00 04 89 DE
+
+    """
+    fadr_ms = (fadr >> 8) & 0xFF
+    fadr_ls = fadr & 0xFF
+    a = 1 if position else 0
+    q_bit = 1 if q else 0
+    db2 = 0x80 | (q_bit << 5) | (a << 3) | position
+    return build_xbus(0x53, bytes((fadr_ms, fadr_ls, db2)))
+
+
 # --- Receive path: decoded datasets -----------------------------------------
 
 
@@ -193,6 +232,37 @@ def _decode_hwinfo(payload: bytes) -> HwInfo | None:
         return None
     hw_type, fw_version = struct.unpack_from("<II", payload)
     return HwInfo(hw_type=hw_type, fw_version=fw_version)
+
+
+@dataclass(frozen=True)
+class TurnoutInfo:
+    """Decoded LAN_X_TURNOUT_INFO response (5.3).
+
+    ``position`` is 0 (output 1), 1 (output 2), or None (not switched yet / ZZ=00).
+    ``invalid`` is True when ZZ=11 (invalid combination).
+    """
+
+    fadr: int  # raw function address
+    position: int | None  # 0, 1, or None (not switched yet)
+    invalid: bool  # True when ZZ=11
+
+
+def _decode_turnout_info(payload: bytes) -> TurnoutInfo | None:
+    """Decode a turnout info payload; ``None`` if too short."""
+    if len(payload) < 4:
+        return None
+    fadr_ms, fadr_ls, zz = struct.unpack_from("<BBB", payload, 0)
+    fadr = (fadr_ms << 8) | fadr_ls
+    zz_val = zz & 0x03  # lower 2 bits
+    if zz_val == 0:
+        position: int | None = None  # not switched yet
+    elif zz_val == 1:
+        position = 0  # P=0
+    elif zz_val == 2:
+        position = 1  # P=1
+    else:
+        position = None  # ZZ=11 is invalid
+    return TurnoutInfo(fadr=fadr, position=position, invalid=zz_val == 3)
 
 
 @dataclass(frozen=True)
@@ -299,6 +369,7 @@ RECEIVE_DISPATCH = {
     HDR_SERIAL_NUMBER: _decode_serial_number,
     HDR_HWINFO: _decode_hwinfo,
     HDR_SYSTEMSTATE_DATACHANGED: _decode_system_state,
+    HDR_TURNOUT_INFO: _decode_turnout_info,
 }
 
 
