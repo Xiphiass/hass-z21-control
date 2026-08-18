@@ -199,6 +199,20 @@ class Z21Client:
         """Send LAN_X_SET_STOP (2.13) — halt all locos, leave track power on."""
         self._transport_send(protocol.build_set_stop())
 
+    def set_turnout(
+        self, fadr: int, position: int, q: bool = False
+    ) -> None:
+        """Send LAN_X_SET_TURNOUT (5.2)."""
+        self._transport_send(protocol.build_turnout_set(fadr, position, q))
+
+    def request_turnout_info(self, fadr: int) -> asyncio.Future:
+        """Send LAN_X_GET_TURNOUT_INFO (5.1) and return a Future for the response."""
+        loop = self._loop or asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._pending[protocol.HDR_TURNOUT_INFO] = fut
+        self._transport_send(protocol.build_turnout_info_get(fadr))
+        return fut
+
     def logoff(self) -> None:
         """Send LAN_LOGOFF (2.2)."""
         self.send(protocol.HDR_LOGOFF)
