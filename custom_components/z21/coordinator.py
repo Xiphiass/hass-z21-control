@@ -117,6 +117,7 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
             decoded, protocol.TurnoutInfo
         ):
             self._turnout_positions[decoded.fadr] = decoded.position
+            self.async_update_listeners()
 
     @property
     def turnout_positions(self) -> dict[int, int | None]:
