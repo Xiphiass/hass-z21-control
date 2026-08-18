@@ -16,7 +16,7 @@ import voluptuous as vol
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
-    ConfigFlowResult,
+    FlowResult,
     OptionsFlow,
 )
 from homeassistant.const import CONF_HOST
@@ -56,21 +56,22 @@ def _validate_turnout_fadr_uniqueness(turnouts: list[dict]) -> list[dict]:
     return turnouts
 
 
+# Form schema: permissive (no range constraint) so HA's async_configure
+# doesn't raise before the handler can catch the error.
+TURNOUT_ITEM_SCHEMA = vol.Schema({
+    vol.Required(CONF_TURNOUT_NAME): str,
+    vol.Required(CONF_TURNOUT_FADR): vol.Coerce(int),
+    vol.Optional(CONF_TURNOUT_Q_MODE, default=0): vol.Coerce(int),
+})
+
+# Full validation schema with range + uniqueness checks.
 TURNOUT_SCHEMA = vol.Schema(
     vol.All(
-        [
-            vol.Schema({
-                vol.Required(CONF_TURNOUT_NAME): str,
-                vol.Required(CONF_TURNOUT_FADR): vol.All(
-                    vol.Coerce(int),
-                    vol.Range(min=TURNOUT_FADR_MIN, max=TURNOUT_FADR_MAX),
-                ),
-                vol.Optional(CONF_TURNOUT_Q_MODE, default=0): vol.All(
-                    vol.Coerce(int), vol.Range(min=0, max=3),
-                ),
-            })
-        ],
-        _validate_turnout_fadr_uniqueness,
+        [TURNOUT_ITEM_SCHEMA],
+        vol.All(
+            vol.Range(min=TURNOUT_FADR_MIN, max=TURNOUT_FADR_MAX),
+            _validate_turnout_fadr_uniqueness,
+        ),
     )
 )
 
@@ -84,7 +85,7 @@ class Z21ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    ) -> FlowResult:
         """Handle the initial (and only) step: ask for the host IP."""
         errors: dict[str, str] = {}
 
@@ -132,6 +133,11 @@ class Z21ConfigFlow(ConfigFlow, domain=DOMAIN):
         finally:
             await client.close()
 
+    @staticmethod
+    def async_get_options_flow(config_entry: ConfigEntry) -> Z21OptionsFlow:
+        """Get the options flow for this config entry."""
+        return Z21OptionsFlow(config_entry)
+
 
 class Z21OptionsFlow(OptionsFlow):
     """Handle options for the Z21 config entry."""
@@ -143,20 +149,27 @@ class Z21OptionsFlow(OptionsFlow):
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    ) -> FlowResult:
         """Show the list of configured turnouts with add/edit/delete actions."""
         if user_input is not None:
-            action = user_input["action"]
-            if action == "add":
-                return await self.async_step_add_turnout()
-            if action.startswith("edit_"):
-                idx = int(action.replace("edit_", ""))
-                self._edit_index = idx
-                return await self.async_step_edit_turnout()
-            if action.startswith("delete_"):
-                idx = int(action.replace("delete_", ""))
-                self._turnouts.pop(idx)
-                return await self.async_step_init()
+            if "action" in user_input:
+                action = user_input["action"]
+                if action == "add":
+                    return await self.async_step_add_turnout()
+                if action.startswith("edit_"):
+                    idx = int(action.replace("edit_", ""))
+                    self._edit_index = idx
+                    return await self.async_step_edit_turnout()
+                if action.startswith("delete_"):
+                    idx = int(action.replace("delete_", ""))
+                    self._turnouts.pop(idx)
+                    return await self.async_step_init()
+            # Empty submission - save current state
+            self.hass.config_entries.async_update_entry(
+                self.entry,
+                options={CONF_TURNOUTS: self._turnouts},
+            )
+            return self.async_create_entry(data=self._save_options())
 
         items: list[str] = []
         for i, t in enumerate(self._turnouts):
@@ -180,26 +193,35 @@ class Z21OptionsFlow(OptionsFlow):
 
     async def async_step_add_turnout(
         self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    ) -> FlowResult:
         """Add a new turnout."""
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
-                validated = TURNOUT_SCHEMA([user_input])
-                self._turnouts.append(validated[0])
+                # Validate range first
+                fadr = user_input[CONF_TURNOUT_FADR]
+                if fadr < TURNOUT_FADR_MIN or fadr > TURNOUT_FADR_MAX:
+                    raise vol.Invalid(
+                        f"FAdr must be between {TURNOUT_FADR_MIN} and {TURNOUT_FADR_MAX}",
+                        path=[CONF_TURNOUT_FADR],
+                    )
+                # Validate uniqueness
+                test_list = list(self._turnouts) + [user_input]
+                _validate_turnout_fadr_uniqueness(test_list)
+                self._turnouts.append(user_input)
                 return self.async_create_entry(data=self._save_options())
             except vol.Invalid as err:
                 errors["base"] = str(err)
 
         return self.async_show_form(
             step_id="add_turnout",
-            data_schema=TURNOUT_SCHEMA,
+            data_schema=TURNOUT_ITEM_SCHEMA,
             errors=errors,
         )
 
     async def async_step_edit_turnout(
         self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    ) -> FlowResult:
         """Edit an existing turnout."""
         errors: dict[str, str] = {}
         if self._edit_index is None:
@@ -209,24 +231,26 @@ class Z21OptionsFlow(OptionsFlow):
 
         if user_input is not None:
             try:
+                # Validate range first
+                fadr = user_input[CONF_TURNOUT_FADR]
+                if fadr < TURNOUT_FADR_MIN or fadr > TURNOUT_FADR_MAX:
+                    raise vol.Invalid(
+                        f"FAdr must be between {TURNOUT_FADR_MIN} and {TURNOUT_FADR_MAX}",
+                        path=[CONF_TURNOUT_FADR],
+                    )
                 # Build full list with edited item, validate uniqueness across all
                 test_list = list(self._turnouts)
                 test_list[self._edit_index] = user_input
-                validated = TURNOUT_SCHEMA(test_list)
-                self._turnouts[self._edit_index] = validated[self._edit_index]
+                _validate_turnout_fadr_uniqueness(test_list)
+                self._turnouts[self._edit_index] = user_input
                 return self.async_create_entry(data=self._save_options())
             except vol.Invalid as err:
                 errors["base"] = str(err)
 
         schema = vol.Schema({
             vol.Required(CONF_TURNOUT_NAME, default=current[CONF_TURNOUT_NAME]): str,
-            vol.Required(CONF_TURNOUT_FADR, default=current[CONF_TURNOUT_FADR]): vol.All(
-                vol.Coerce(int),
-                vol.Range(min=TURNOUT_FADR_MIN, max=TURNOUT_FADR_MAX),
-            ),
-            vol.Optional(CONF_TURNOUT_Q_MODE, default=current.get(CONF_TURNOUT_Q_MODE, 0)): vol.All(
-                vol.Coerce(int), vol.Range(min=0, max=3),
-            ),
+            vol.Required(CONF_TURNOUT_FADR, default=current[CONF_TURNOUT_FADR]): vol.Coerce(int),
+            vol.Optional(CONF_TURNOUT_Q_MODE, default=current.get(CONF_TURNOUT_Q_MODE, 0)): vol.Coerce(int),
         })
 
         return self.async_show_form(

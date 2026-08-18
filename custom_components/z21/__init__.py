@@ -8,7 +8,7 @@ track-power switch and an emergency-stop button) send on the same I/O seam.
 
 from __future__ import annotations
 
-from homeassistant.config_entries import ConfigEntry, OptionsFlow
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
@@ -74,8 +74,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator: Z21Coordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.async_shutdown_client()
     return unloaded
-
-
-async def async_get_options_flow(hass: HomeAssistant, entry: ConfigEntry) -> OptionsFlow:
-    """Get the options flow for this config entry."""
-    return Z21OptionsFlow(entry)
