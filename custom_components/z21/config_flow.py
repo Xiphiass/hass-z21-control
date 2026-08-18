@@ -28,6 +28,47 @@ _CONNECT_TIMEOUT = 1.0
 _CONNECT_RETRIES = 2
 _CONNECT_BACKOFF = 0.3
 
+# Turnout config constants
+TURNOUT_FADR_MIN = 0
+TURNOUT_FADR_MAX = 65534
+CONF_TURNOUTS = "turnouts"
+CONF_TURNOUT_NAME = "name"
+CONF_TURNOUT_FADR = "fadr"
+CONF_TURNOUT_Q_MODE = "q_mode"
+
+
+def _validate_turnout_fadr_uniqueness(turnouts: list[dict]) -> list[dict]:
+    """Validate that FAdr values are unique across all turnouts."""
+    seen_fadr: dict[int, str] = {}
+    for t in turnouts:
+        fadr = t[CONF_TURNOUT_FADR]
+        if fadr in seen_fadr:
+            raise vol.Invalid(
+                f"Duplicate FAdr {fadr} (used by '{seen_fadr[fadr]}')",
+                path=[CONF_TURNOUTS],
+            )
+        seen_fadr[fadr] = t[CONF_TURNOUT_NAME]
+    return turnouts
+
+
+TURNOUT_SCHEMA = vol.Schema(
+    vol.All(
+        [
+            vol.Schema({
+                vol.Required(CONF_TURNOUT_NAME): str,
+                vol.Required(CONF_TURNOUT_FADR): vol.All(
+                    vol.Coerce(int),
+                    vol.Range(min=TURNOUT_FADR_MIN, max=TURNOUT_FADR_MAX),
+                ),
+                vol.Optional(CONF_TURNOUT_Q_MODE, default=0): vol.All(
+                    vol.Coerce(int), vol.Range(min=0, max=3),
+                ),
+            })
+        ],
+        _validate_turnout_fadr_uniqueness,
+    )
+)
+
 STEP_USER_DATA_SCHEMA = vol.Schema({vol.Required(CONF_HOST): str})
 
 
