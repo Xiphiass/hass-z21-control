@@ -36,6 +36,7 @@ HDR_X = 0x40  # LAN_X (X-bus tunnel; carries e.g. LAN_X_SET_TRACK_POWER_*)
 
 # Inbound (Z21 -> client)
 HDR_SYSTEMSTATE_DATACHANGED = 0x84  # LAN_SYSTEMSTATE_DATACHANGED (2.18)
+HDR_TURNOUT_INFO = 0x43  # LAN_X_TURNOUT_INFO (5.3)
 
 # --- Broadcast flags (2.16) -------------------------------------------------
 
