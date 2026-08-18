@@ -272,22 +272,24 @@ async def test_options_flow_add_turnout(hass: HomeAssistant) -> None:
 async def test_options_flow_duplicate_fadr_rejected(hass: HomeAssistant) -> None:
     """Adding a turnout with a duplicate FAdr is rejected."""
     entry = MockConfigEntry(
-        domain=DOMAIN,
-        unique_id="12345",
-        data={
-            CONF_HOST: _HOST,
-            CONF_SERIAL: _SERIAL,
-            CONF_HW_TYPE: _HW_TYPE,
-            CONF_FW_VERSION: _FW_VERSION,
-            CONF_TURNOUTS: [
-                {
-                    CONF_TURNOUT_NAME: "Turnout 1",
-                    CONF_TURNOUT_FADR: 100,
-                    CONF_TURNOUT_Q_MODE: 0,
-                }
-            ],
-        },
-    )
+                domain=DOMAIN,
+                unique_id="12345",
+                data={
+                    CONF_HOST: _HOST,
+                    CONF_SERIAL: _SERIAL,
+                    CONF_HW_TYPE: _HW_TYPE,
+                    CONF_FW_VERSION: _FW_VERSION,
+                },
+                options={
+                    CONF_TURNOUTS: [
+                        {
+                            CONF_TURNOUT_NAME: "Turnout 1",
+                            CONF_TURNOUT_FADR: 100,
+                            CONF_TURNOUT_Q_MODE: 0,
+                        }
+                    ],
+                },
+            )
     entry.add_to_hass(hass)
 
     result = await hass.config_entries.options.async_init(
@@ -343,33 +345,35 @@ async def test_options_flow_out_of_range_fadr(hass: HomeAssistant) -> None:
     )
 
     assert result["type"] is FlowResultType.FORM
-    assert "Range" in str(result.get("errors", {}))
+    assert "must be between" in str(result.get("errors", {}))
 
 
 async def test_options_flow_delete_turnout(hass: HomeAssistant) -> None:
     """Deleting a turnout removes it from the list."""
     entry = MockConfigEntry(
-        domain=DOMAIN,
-        unique_id="12345",
-        data={
-            CONF_HOST: _HOST,
-            CONF_SERIAL: _SERIAL,
-            CONF_HW_TYPE: _HW_TYPE,
-            CONF_FW_VERSION: _FW_VERSION,
-            CONF_TURNOUTS: [
-                {
-                    CONF_TURNOUT_NAME: "Turnout 1",
-                    CONF_TURNOUT_FADR: 100,
-                    CONF_TURNOUT_Q_MODE: 0,
-                },
-                {
-                    CONF_TURNOUT_NAME: "Turnout 2",
-                    CONF_TURNOUT_FADR: 200,
-                    CONF_TURNOUT_Q_MODE: 1,
-                },
-            ],
-        },
-    )
+            domain=DOMAIN,
+            unique_id="12345",
+            data={
+                CONF_HOST: _HOST,
+                CONF_SERIAL: _SERIAL,
+                CONF_HW_TYPE: _HW_TYPE,
+                CONF_FW_VERSION: _FW_VERSION,
+            },
+            options={
+                CONF_TURNOUTS: [
+                    {
+                        CONF_TURNOUT_NAME: "Turnout 1",
+                        CONF_TURNOUT_FADR: 100,
+                        CONF_TURNOUT_Q_MODE: 0,
+                    },
+                    {
+                        CONF_TURNOUT_NAME: "Turnout 2",
+                        CONF_TURNOUT_FADR: 200,
+                        CONF_TURNOUT_Q_MODE: 1,
+                    },
+                ],
+            },
+        )
     entry.add_to_hass(hass)
 
     # Step 1: init -> delete first turnout
