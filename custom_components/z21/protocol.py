@@ -44,6 +44,7 @@ HDR_TURNOUT_INFO = 0x43  # LAN_X_TURNOUT_INFO (5.3)
 # NOTE: 0x00000001 is the *driving & switching* group, NOT system state — a
 # common mix-up. v1 subscribes only to system state.
 BROADCAST_FLAG_SYSTEM_STATE = 0x00000100
+BROADCAST_FLAG_DRIVING_SWITCHING = 0x00000400
 
 
 class CentralState(IntFlag):
