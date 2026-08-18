@@ -249,11 +249,11 @@ class TurnoutInfo:
 
 def _decode_turnout_info(payload: bytes) -> TurnoutInfo | None:
     """Decode a turnout info payload; ``None`` if too short."""
-    if len(payload) < 4:
+    if len(payload) < 3:
         return None
     fadr_ms, fadr_ls, zz = struct.unpack_from("<BBB", payload, 0)
     fadr = (fadr_ms << 8) | fadr_ls
-    zz_val = zz & 0x03  # lower 2 bits
+    zz_val = zz >> 2  # bits 2–7: 0=not switched, 1=position 0, 2=position 1, 3=invalid
     if zz_val == 0:
         position: int | None = None  # not switched yet
     elif zz_val == 1:
@@ -359,6 +359,7 @@ def _decode_system_state(payload: bytes) -> SystemState | None:
 # entry here plus its decoder (ADR-0001 receive dispatch table).
 _DISPATCH = {
     HDR_SYSTEMSTATE_DATACHANGED: _decode_system_state,
+    HDR_TURNOUT_INFO: _decode_turnout_info,
 }
 
 # Full receive dispatch for transport clients: the header-keyed table the async
@@ -401,7 +402,7 @@ def split_datasets(data: bytes) -> list[tuple[int, bytes]]:
     return datasets
 
 
-def parse_datagram(data: bytes) -> list[SystemState]:
+def parse_datagram(data: bytes) -> list[SystemState | TurnoutInfo]:
     """Split a UDP payload into datasets and decode the known ones.
 
     Length-driven and total: walks the buffer via :func:`split_datasets`,
@@ -409,7 +410,7 @@ def parse_datagram(data: bytes) -> list[SystemState]:
     Unknown headers, short/malformed datasets, and older firmware payloads are
     skipped — this never raises on bad input.
     """
-    results: list[SystemState] = []
+    results: list[SystemState | TurnoutInfo] = []
     for header, payload in split_datasets(data):
         decoder = _DISPATCH.get(header)
         if decoder is not None:

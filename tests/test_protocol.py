@@ -112,7 +112,97 @@ def test_turnout_info_get_fadr_65534_exact_bytes():
     assert build_turnout_info_get(65534) == bytes.fromhex("0800400043FFFE42")
 
 
-# --- System State decoding ---------------------------------------------------
+def test_turnout_set_fadr_4_position_0_exact_bytes():
+    # FAdr=4, position=0 (output 1), Q=0 -> XOR(0x53,0x00,0x04,0x80)=0xD7
+    assert build_turnout_set(4, 0) == bytes.fromhex("0900400053000480D7")
+
+
+def test_turnout_set_fadr_4_position_1_exact_bytes():
+    # FAdr=4, position=1 (output 2), Q=0 -> XOR(0x53,0x00,0x04,0x89)=0xDE
+    assert build_turnout_set(4, 1) == bytes.fromhex("0900400053000489DE")
+
+
+def test_turnout_set_fadr_4_position_1_q_bit_exact_bytes():
+    # FAdr=4, position=1, Q=1 -> XOR(0x53,0x00,0x04,0xA9)=0xFE
+    assert build_turnout_set(4, 1, q=True) == bytes.fromhex("09004000530004A9FE")
+
+
+def test_turnout_set_fadr_0_position_0_exact_bytes():
+    # FAdr=0, position=0, Q=0 -> XOR(0x53,0x00,0x00,0x80)=0xD3
+    assert build_turnout_set(0, 0) == bytes.fromhex("0900400053000080D3")
+
+
+# --- Turnout Info decoding ---------------------------------------------------
+
+
+def test_decode_turnout_info_fadr_4_position_1():
+    # ZZ=10 (position=1), Q=0, P=0 → byte = 0x08
+    payload = struct.pack("<BBB", 0x00, 0x04, 0x08)
+    info = _decode_turnout_info(payload)
+    assert info is not None
+    assert info.fadr == 4
+    assert info.position == 1
+    assert info.invalid is False
+
+
+def test_decode_turnout_info_fadr_4_position_0():
+    # ZZ=01 (position=0), Q=0, P=0 → byte = 0x04
+    payload = struct.pack("<BBB", 0x00, 0x04, 0x04)
+    info = _decode_turnout_info(payload)
+    assert info is not None
+    assert info.fadr == 4
+    assert info.position == 0
+    assert info.invalid is False
+
+
+def test_decode_turnout_info_not_switched_yet():
+    # ZZ=00 (not switched yet) → byte = 0x00
+    payload = struct.pack("<BBB", 0x00, 0x04, 0x00)
+    info = _decode_turnout_info(payload)
+    assert info is not None
+    assert info.fadr == 4
+    assert info.position is None
+    assert info.invalid is False
+
+
+def test_decode_turnout_info_invalid():
+    # ZZ=11 (invalid) → byte = 0x0C
+    payload = struct.pack("<BBB", 0x00, 0x04, 0x0C)
+    info = _decode_turnout_info(payload)
+    assert info is not None
+    assert info.fadr == 4
+    assert info.position is None
+    assert info.invalid is True
+
+
+def test_decode_turnout_info_short_payload():
+    assert _decode_turnout_info(b"") is None
+    assert _decode_turnout_info(b"\x00\x04") is None
+
+
+def test_decode_turnout_info_fadr_65534():
+    payload = struct.pack("<BBB", 0xFF, 0xFE, 0x08)
+    info = _decode_turnout_info(payload)
+    assert info is not None
+    assert info.fadr == 65534
+    assert info.position == 1
+    assert info.invalid is False
+
+
+# --- Combined datagram -------------------------------------------------------
+
+
+def test_combined_datagram_with_turnout_info():
+    first = _system_state_datagram(main=1, central=int(CentralState.SHORT_CIRCUIT))
+    turnout_payload = struct.pack("<BBB", 0x00, 0x04, 0x08)
+    turnout_dgram = build_frame(HDR_TURNOUT_INFO, turnout_payload)
+    second = _system_state_datagram(main=2)
+    dgram = first + turnout_dgram + second
+    states = parse_datagram(dgram)
+    assert len(states) == 3  # SystemState, TurnoutInfo, SystemState
+
+
+# --- Robustness: never raise -------------------------------------------------
 
 
 def _system_state_datagram(
