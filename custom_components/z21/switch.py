@@ -22,7 +22,7 @@ from homeassistant.components.switch import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -32,7 +32,7 @@ from .const import CONF_SERIAL, DOMAIN
 from .coordinator import Z21Coordinator
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(kw_only=True)
 class Z21SwitchDescription(SwitchEntityDescription):
     """Describes a Z21 switch: how to read its state and drive the client."""
 

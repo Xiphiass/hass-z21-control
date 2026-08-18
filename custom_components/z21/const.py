@@ -33,6 +33,16 @@ CONF_FW_VERSION = "fw_version"
 # (CONTEXT.md "Domain").
 MANUFACTURER = "Roco/Fleischmann"
 
+# Turnout management (options flow)
+CONF_TURNOUTS = "turnouts"
+CONF_TURNOUT_NAME = "name"
+CONF_TURNOUT_FADR = "fadr"
+CONF_TURNOUT_Q_MODE = "q_mode"
+
+# Z21 LAN protocol: FAdr is 16-bit, max usable is 65534
+TURNOUT_FADR_MIN = 0
+TURNOUT_FADR_MAX = 65534
+
 # Known LAN_GET_HWINFO HwType codes (Z21 LAN protocol spec 2.20). Unknown types
 # fall back to a hex string via ``hw_type_name``.
 HW_TYPE_NAMES: dict[int, str] = {

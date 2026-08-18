@@ -147,7 +147,7 @@ def _track_voltage_entity_id(hass: HomeAssistant) -> str:
 async def test_setup_subscribes_and_keepalive(
     hass: HomeAssistant, monkeypatch
 ) -> None:
-    """Setup sends broadcast flag 0x00000100 and a System State poll."""
+    """Setup sends broadcast flags (SYSTEM_STATE | DRIVING_SWITCHING) and a System State poll."""
     transports = _install_client(
         monkeypatch, responder=_responder(answer_state=True)
     )
@@ -160,9 +160,13 @@ async def test_setup_subscribes_and_keepalive(
     assert entry.state is ConfigEntryState.LOADED
     sent = transports[0].sent
     broadcast = protocol.build_frame(
-        protocol.HDR_SET_BROADCASTFLAGS,
-        struct.pack("<I", protocol.BROADCAST_FLAG_SYSTEM_STATE),
-    )
+            protocol.HDR_SET_BROADCASTFLAGS,
+            struct.pack(
+                "<I",
+                protocol.BROADCAST_FLAG_SYSTEM_STATE
+                | protocol.BROADCAST_FLAG_DRIVING_SWITCHING,
+            ),
+        )
     assert broadcast in sent
     assert protocol.build_frame(protocol.HDR_SYSTEMSTATE_GETDATA) in sent
 
@@ -292,9 +296,13 @@ async def test_recovery_resends_broadcast_flags(
 
     entity_id = _track_voltage_entity_id(hass)
     broadcast = protocol.build_frame(
-        protocol.HDR_SET_BROADCASTFLAGS,
-        struct.pack("<I", protocol.BROADCAST_FLAG_SYSTEM_STATE),
-    )
+            protocol.HDR_SET_BROADCASTFLAGS,
+            struct.pack(
+                "<I",
+                protocol.BROADCAST_FLAG_SYSTEM_STATE
+                | protocol.BROADCAST_FLAG_DRIVING_SWITCHING,
+            ),
+        )
     # One broadcast-flags send at setup.
     assert transports[0].sent.count(broadcast) == 1
 

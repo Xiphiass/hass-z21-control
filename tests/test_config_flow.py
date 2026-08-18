@@ -30,6 +30,14 @@ from custom_components.z21.const import (
     format_fw_version,
     hw_type_name,
 )
+from custom_components.z21.config_flow import (
+    CONF_TURNOUTS,
+    CONF_TURNOUT_FADR,
+    CONF_TURNOUT_NAME,
+    CONF_TURNOUT_Q_MODE,
+    TURNOUT_FADR_MAX,
+    TURNOUT_FADR_MIN,
+)
 
 _HOST = "192.0.2.10"
 _SERIAL = 0xABCD
@@ -191,3 +199,201 @@ async def test_user_flow_duplicate_aborts(hass: HomeAssistant, monkeypatch) -> N
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
     assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+
+
+async def test_options_flow_empty_list(hass: HomeAssistant) -> None:
+    """Options flow starts with an empty turnout list."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="12345",
+        data={
+            CONF_HOST: _HOST,
+            CONF_SERIAL: _SERIAL,
+            CONF_HW_TYPE: _HW_TYPE,
+            CONF_FW_VERSION: _FW_VERSION,
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+
+async def test_options_flow_add_turnout(hass: HomeAssistant) -> None:
+    """Adding a valid turnout succeeds."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="12345",
+        data={
+            CONF_HOST: _HOST,
+            CONF_SERIAL: _SERIAL,
+            CONF_HW_TYPE: _HW_TYPE,
+            CONF_FW_VERSION: _FW_VERSION,
+        },
+    )
+    entry.add_to_hass(hass)
+
+    # Step 1: init -> add
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"action": "add"},
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "add_turnout"
+
+    # Step 2: submit turnout data
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_TURNOUT_NAME: "Turnout 1",
+            CONF_TURNOUT_FADR: 100,
+            CONF_TURNOUT_Q_MODE: 0,
+        },
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_TURNOUTS] == [
+        {
+            CONF_TURNOUT_NAME: "Turnout 1",
+            CONF_TURNOUT_FADR: 100,
+            CONF_TURNOUT_Q_MODE: 0,
+        }
+    ]
+
+
+async def test_options_flow_duplicate_fadr_rejected(hass: HomeAssistant) -> None:
+    """Adding a turnout with a duplicate FAdr is rejected."""
+    entry = MockConfigEntry(
+                domain=DOMAIN,
+                unique_id="12345",
+                data={
+                    CONF_HOST: _HOST,
+                    CONF_SERIAL: _SERIAL,
+                    CONF_HW_TYPE: _HW_TYPE,
+                    CONF_FW_VERSION: _FW_VERSION,
+                },
+                options={
+                    CONF_TURNOUTS: [
+                        {
+                            CONF_TURNOUT_NAME: "Turnout 1",
+                            CONF_TURNOUT_FADR: 100,
+                            CONF_TURNOUT_Q_MODE: 0,
+                        }
+                    ],
+                },
+            )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"action": "add"},
+    )
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_TURNOUT_NAME: "Turnout 2",
+            CONF_TURNOUT_FADR: 100,  # duplicate
+            CONF_TURNOUT_Q_MODE: 0,
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert "Duplicate" in str(result.get("errors", {}))
+
+
+async def test_options_flow_out_of_range_fadr(hass: HomeAssistant) -> None:
+    """Adding a turnout with FAdr outside valid range is rejected."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="12345",
+        data={
+            CONF_HOST: _HOST,
+            CONF_SERIAL: _SERIAL,
+            CONF_HW_TYPE: _HW_TYPE,
+            CONF_FW_VERSION: _FW_VERSION,
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"action": "add"},
+    )
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_TURNOUT_NAME: "Bad Turnout",
+            CONF_TURNOUT_FADR: 65535,  # exceeds max
+            CONF_TURNOUT_Q_MODE: 0,
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert "must be between" in str(result.get("errors", {}))
+
+
+async def test_options_flow_delete_turnout(hass: HomeAssistant) -> None:
+    """Deleting a turnout removes it from the list."""
+    entry = MockConfigEntry(
+            domain=DOMAIN,
+            unique_id="12345",
+            data={
+                CONF_HOST: _HOST,
+                CONF_SERIAL: _SERIAL,
+                CONF_HW_TYPE: _HW_TYPE,
+                CONF_FW_VERSION: _FW_VERSION,
+            },
+            options={
+                CONF_TURNOUTS: [
+                    {
+                        CONF_TURNOUT_NAME: "Turnout 1",
+                        CONF_TURNOUT_FADR: 100,
+                        CONF_TURNOUT_Q_MODE: 0,
+                    },
+                    {
+                        CONF_TURNOUT_NAME: "Turnout 2",
+                        CONF_TURNOUT_FADR: 200,
+                        CONF_TURNOUT_Q_MODE: 1,
+                    },
+                ],
+            },
+        )
+    entry.add_to_hass(hass)
+
+    # Step 1: init -> delete first turnout
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"action": "delete_0"},
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    # Step 2: save
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {},
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert len(result["data"][CONF_TURNOUTS]) == 1
+    assert result["data"][CONF_TURNOUTS][0][CONF_TURNOUT_FADR] == 200

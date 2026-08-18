@@ -23,6 +23,7 @@ from .const import (
     format_fw_version,
     hw_type_name,
 )
+from .config_flow import Z21OptionsFlow
 from .coordinator import Z21Coordinator
 
 PLATFORMS: list[Platform] = [
