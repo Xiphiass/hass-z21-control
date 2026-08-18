@@ -28,7 +28,14 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import protocol
 from .client import Z21Client
-from .const import CONF_SERIAL, DOMAIN
+from .const import (
+    CONF_SERIAL,
+    CONF_TURNOUTS,
+    CONF_TURNOUT_FADR,
+    CONF_TURNOUT_NAME,
+    CONF_TURNOUT_Q_MODE,
+    DOMAIN,
+)
 from .coordinator import Z21Coordinator
 
 
@@ -62,9 +69,21 @@ async def async_setup_entry(
 ) -> None:
     """Set up Z21 switches from a config entry."""
     coordinator: Z21Coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
+    entities: list[Z21Switch | Z21TurnoutSwitch] = [
         Z21Switch(coordinator, entry, description) for description in SWITCHES
-    )
+    ]
+    # Add turnout switches from configured turnouts
+    for turnout in entry.options.get(CONF_TURNOUTS, []):
+        entities.append(
+            Z21TurnoutSwitch(
+                coordinator=coordinator,
+                entry=entry,
+                fadr=turnout[CONF_TURNOUT_FADR],
+                name=turnout[CONF_TURNOUT_NAME],
+                q_mode=bool(turnout[CONF_TURNOUT_Q_MODE]),
+            )
+        )
+    async_add_entities(entities)
 
 
 class Z21Switch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
