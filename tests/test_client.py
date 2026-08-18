@@ -187,6 +187,87 @@ def test_emergency_stop_without_transport_raises():
         c.emergency_stop()
 
 
+def test_set_turnout_fadr_4_position_1():
+    c = Z21Client("192.0.2.10")
+    t = FakeTransport()
+    c._attach_transport(t)
+    c.set_turnout(4, 1)
+    assert t.sent == [protocol.build_turnout_set(4, 1)]
+
+
+def test_set_turnout_with_q_bit():
+    c = Z21Client("192.0.2.10")
+    t = FakeTransport()
+    c._attach_transport(t)
+    c.set_turnout(4, 1, q=True)
+    assert t.sent == [protocol.build_turnout_set(4, 1, q=True)]
+
+
+def test_set_turnout_without_transport_raises():
+    c = Z21Client("192.0.2.10")
+    with pytest.raises(RuntimeError):
+        c.set_turnout(0, 0)
+
+
+# --- request_turnout_info ---------------------------------------------------
+
+
+def test_request_turnout_info_returns_future():
+    async def scenario():
+        c = Z21Client("192.0.2.10")
+        t = FakeTransport()
+        c._attach_transport(t)
+
+        def responder(header, client):
+            # The request datagram uses header 0x40 at bytes 2-4 (the GET
+            # command), while the response uses HDR_TURNOUT_INFO (0x43).
+            if header == 0x40:
+                payload = struct.pack("<BBB", 0x00, 0x04, 0x08)
+                client._on_datagram(
+                    protocol.build_frame(protocol.HDR_TURNOUT_INFO, payload)
+                )
+
+        c._attach_transport(RespondingTransport(c, responder))
+        fut = c.request_turnout_info(4)
+        result = await asyncio.wait_for(fut, timeout=0.5)
+        return result
+
+    info = run(scenario())
+    assert isinstance(info, protocol.TurnoutInfo)
+    assert info.fadr == 4
+    assert info.position == 1
+
+
+def test_request_turnout_info_without_transport_raises():
+    c = Z21Client("192.0.2.10")
+    with pytest.raises(RuntimeError):
+        c.request_turnout_info(0)
+
+
+# --- Broadcast delivery -----------------------------------------------------
+
+
+def test_turnout_info_broadcast_reaches_subscriber():
+    """LAN_X_TURNOUT_INFO datagrams delivered via subscribe() (ADR-0001)."""
+    c = Z21Client("192.0.2.10")
+    received: list[tuple[int, object]] = []
+    unsub = c.subscribe(lambda h, d: received.append((h, d)))
+
+    turnout_payload = struct.pack("<BBB", 0x00, 0x04, 0x08)
+    c._on_datagram(protocol.build_frame(protocol.HDR_TURNOUT_INFO, turnout_payload))
+
+    assert len(received) == 1
+    header, decoded = received[0]
+    assert header == protocol.HDR_TURNOUT_INFO
+    assert isinstance(decoded, protocol.TurnoutInfo)
+    assert decoded.fadr == 4
+    assert decoded.position == 1
+
+    unsub()
+    c._on_datagram(protocol.build_frame(protocol.HDR_TURNOUT_INFO, turnout_payload))
+    assert len(received) == 1  # no further delivery after unsubscribe
+
+
 # --- Receive seam -----------------------------------------------------------
 
 
