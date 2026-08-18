@@ -1,5 +1,5 @@
 .claude/
-.hermes/
+.hermes/plans
 z21-lan-protocol.md
 REQUIREMENTS.md
 
@@ -10,3 +10,4 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+build/
