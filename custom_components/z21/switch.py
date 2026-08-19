@@ -28,7 +28,14 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import protocol
 from .client import Z21Client
-from .const import CONF_SERIAL, DOMAIN
+from .const import (
+    CONF_SERIAL,
+    CONF_TURNOUTS,
+    CONF_TURNOUT_FADR,
+    CONF_TURNOUT_NAME,
+    CONF_TURNOUT_Q_MODE,
+    DOMAIN,
+)
 from .coordinator import Z21Coordinator
 
 
@@ -62,9 +69,21 @@ async def async_setup_entry(
 ) -> None:
     """Set up Z21 switches from a config entry."""
     coordinator: Z21Coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
+    entities: list[Z21Switch | Z21TurnoutSwitch] = [
         Z21Switch(coordinator, entry, description) for description in SWITCHES
-    )
+    ]
+    # Add turnout switches from configured turnouts
+    for turnout in entry.options.get(CONF_TURNOUTS, []):
+        entities.append(
+            Z21TurnoutSwitch(
+                coordinator=coordinator,
+                entry=entry,
+                fadr=turnout[CONF_TURNOUT_FADR],
+                name=turnout[CONF_TURNOUT_NAME],
+                q_mode=bool(turnout[CONF_TURNOUT_Q_MODE]),
+            )
+        )
+    async_add_entities(entities)
 
 
 class Z21Switch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
@@ -99,3 +118,52 @@ class Z21Switch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Send the power-off command; state follows the next System State."""
         self.entity_description.set_fn(self.coordinator.client, False)
+
+
+class Z21TurnoutSwitch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
+    """A turnout (Weiche) exposed as a switch entity.
+
+    ``is_on`` reflects the last known broadcast position (0=closed, 1=diverged).
+    ``async_turn_on()`` sends ``set_turnout(fadr, 1, q)``.
+    ``async_turn_off()`` sends ``set_turnout(fadr, 0, q)``.
+    State is unavailable before the first position is known (broadcast or poll).
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: Z21Coordinator,
+        entry: ConfigEntry,
+        fadr: int,
+        name: str,
+        q_mode: bool,
+    ) -> None:
+        super().__init__(coordinator)
+        self._fadr = fadr
+        self._q_mode = q_mode
+        serial = entry.data[CONF_SERIAL]
+        self._attr_unique_id = f"{serial}_turnout_{fadr}"
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, str(serial))})
+        self._attr_name = name
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return the last known turnout position, or None if unknown."""
+        pos = self.coordinator.turnout_positions.get(self._fadr)
+        if pos is None:
+            return None
+        return pos == 1
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Switch the turnout to diverged (position 1)."""
+        self.coordinator.client.set_turnout(self._fadr, 1, self._q_mode)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Switch the turnout to closed (position 0)."""
+        self.coordinator.client.set_turnout(self._fadr, 0, self._q_mode)
+
+    async def async_added_to_hass(self) -> None:
+        """Poll the initial position on entity creation."""
+        await super().async_added_to_hass()
+        self.coordinator.client.request_turnout_info(self._fadr)
