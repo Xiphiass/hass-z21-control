@@ -277,11 +277,6 @@ def test_broadcast_flag_values_match_z21_spec():
     This test prevents the kind of bug where the constant was set to 0x00000400
     instead of 0x00000001 (issue #29).
     """
-    from custom_components.z21.protocol import (
-        BROADCAST_FLAG_DRIVING_SWITCHING,
-        BROADCAST_FLAG_SYSTEM_STATE,
-    )
-
     # Driving & switching must be 0x00000001 (not 0x00000400!)
     assert BROADCAST_FLAG_DRIVING_SWITCHING == 0x00000001, (
         f"BROADCAST_FLAG_DRIVING_SWITCHING must be 0x00000001 per Z21 spec, "
