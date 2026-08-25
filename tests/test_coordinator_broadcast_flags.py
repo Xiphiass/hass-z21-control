@@ -270,8 +270,6 @@ def test_broadcast_flag_values_match_z21_spec():
 
     The Z21 LAN protocol spec defines these exact values:
     - Driving & Switching: 0x00000001
-    - R-Bus Feedback: 0x00000002
-    - RailCom: 0x00000004
     - System State: 0x00000100
 
     This test prevents the kind of bug where the constant was set to 0x00000400
