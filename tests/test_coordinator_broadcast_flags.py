@@ -263,3 +263,32 @@ def test_coordinator_stale_recovery_sends_combined_flags(mock_client):
         # Verify combined flags were sent during stale recovery
         assert mock_client.set_broadcastflags.call_count == 1
         mock_client.set_broadcastflags.assert_called_with(combined_flags)
+
+
+def test_broadcast_flag_values_match_z21_spec():
+    """Verify broadcast flag constants match Z21 LAN protocol spec section 2.16.
+
+    The Z21 LAN protocol spec defines these exact values:
+    - Driving & Switching: 0x00000001
+    - System State: 0x00000100
+
+    This test prevents the kind of bug where the constant was set to 0x00000400
+    instead of 0x00000001 (issue #29).
+    """
+    # Driving & switching must be 0x00000001 (not 0x00000400!)
+    assert BROADCAST_FLAG_DRIVING_SWITCHING == 0x00000001, (
+        f"BROADCAST_FLAG_DRIVING_SWITCHING must be 0x00000001 per Z21 spec, "
+        f"got 0x{BROADCAST_FLAG_DRIVING_SWITCHING:08x}"
+    )
+
+    # System state must be 0x00000100
+    assert BROADCAST_FLAG_SYSTEM_STATE == 0x00000100, (
+        f"BROADCAST_FLAG_SYSTEM_STATE must be 0x00000100 per Z21 spec, "
+        f"got 0x{BROADCAST_FLAG_SYSTEM_STATE:08x}"
+    )
+
+    # Combined flags must equal 0x0101 (257 decimal)
+    combined = BROADCAST_FLAG_SYSTEM_STATE | BROADCAST_FLAG_DRIVING_SWITCHING
+    assert combined == 0x00000101, (
+        f"Combined flags must be 0x00000101, got 0x{combined:08x}"
+    )
