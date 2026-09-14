@@ -37,7 +37,6 @@ MANUFACTURER = "Roco/Fleischmann"
 CONF_TURNOUTS = "turnouts"
 CONF_TURNOUT_NAME = "name"
 CONF_TURNOUT_FADR = "fadr"
-CONF_TURNOUT_Q_MODE = "q_mode"
 
 # Z21 LAN protocol: FAdr is 16-bit, max usable is 65534
 TURNOUT_FADR_MIN = 0

@@ -34,7 +34,6 @@ from custom_components.z21.config_flow import (
     CONF_TURNOUTS,
     CONF_TURNOUT_FADR,
     CONF_TURNOUT_NAME,
-    CONF_TURNOUT_Q_MODE,
     TURNOUT_FADR_MAX,
     TURNOUT_FADR_MIN,
 )
@@ -255,7 +254,6 @@ async def test_options_flow_add_turnout(hass: HomeAssistant) -> None:
         {
             CONF_TURNOUT_NAME: "Turnout 1",
             CONF_TURNOUT_FADR: 100,
-            CONF_TURNOUT_Q_MODE: 0,
         },
     )
 
@@ -264,7 +262,6 @@ async def test_options_flow_add_turnout(hass: HomeAssistant) -> None:
         {
             CONF_TURNOUT_NAME: "Turnout 1",
             CONF_TURNOUT_FADR: 100,
-            CONF_TURNOUT_Q_MODE: 0,
         }
     ]
 
@@ -285,7 +282,6 @@ async def test_options_flow_duplicate_fadr_rejected(hass: HomeAssistant) -> None
                         {
                             CONF_TURNOUT_NAME: "Turnout 1",
                             CONF_TURNOUT_FADR: 100,
-                            CONF_TURNOUT_Q_MODE: 0,
                         }
                     ],
                 },
@@ -305,7 +301,6 @@ async def test_options_flow_duplicate_fadr_rejected(hass: HomeAssistant) -> None
         {
             CONF_TURNOUT_NAME: "Turnout 2",
             CONF_TURNOUT_FADR: 100,  # duplicate
-            CONF_TURNOUT_Q_MODE: 0,
         },
     )
 
@@ -340,7 +335,6 @@ async def test_options_flow_out_of_range_fadr(hass: HomeAssistant) -> None:
         {
             CONF_TURNOUT_NAME: "Bad Turnout",
             CONF_TURNOUT_FADR: 65535,  # exceeds max
-            CONF_TURNOUT_Q_MODE: 0,
         },
     )
 
@@ -364,12 +358,10 @@ async def test_options_flow_delete_turnout(hass: HomeAssistant) -> None:
                     {
                         CONF_TURNOUT_NAME: "Turnout 1",
                         CONF_TURNOUT_FADR: 100,
-                        CONF_TURNOUT_Q_MODE: 0,
                     },
                     {
                         CONF_TURNOUT_NAME: "Turnout 2",
                         CONF_TURNOUT_FADR: 200,
-                        CONF_TURNOUT_Q_MODE: 1,
                     },
                 ],
             },

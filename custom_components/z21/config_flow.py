@@ -39,7 +39,6 @@ TURNOUT_FADR_MAX = 65534
 CONF_TURNOUTS = "turnouts"
 CONF_TURNOUT_NAME = "name"
 CONF_TURNOUT_FADR = "fadr"
-CONF_TURNOUT_Q_MODE = "q_mode"
 
 
 def _validate_turnout_fadr_uniqueness(turnouts: list[dict]) -> list[dict]:
@@ -61,7 +60,6 @@ def _validate_turnout_fadr_uniqueness(turnouts: list[dict]) -> list[dict]:
 TURNOUT_ITEM_SCHEMA = vol.Schema({
     vol.Required(CONF_TURNOUT_NAME): str,
     vol.Required(CONF_TURNOUT_FADR): vol.Coerce(int),
-    vol.Optional(CONF_TURNOUT_Q_MODE, default=0): vol.Coerce(int),
 })
 
 # Full validation schema with range + uniqueness checks.
@@ -250,7 +248,6 @@ class Z21OptionsFlow(OptionsFlow):
         schema = vol.Schema({
             vol.Required(CONF_TURNOUT_NAME, default=current[CONF_TURNOUT_NAME]): str,
             vol.Required(CONF_TURNOUT_FADR, default=current[CONF_TURNOUT_FADR]): vol.Coerce(int),
-            vol.Optional(CONF_TURNOUT_Q_MODE, default=current.get(CONF_TURNOUT_Q_MODE, 0)): vol.Coerce(int),
         })
 
         return self.async_show_form(

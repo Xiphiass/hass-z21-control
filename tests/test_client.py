@@ -187,26 +187,87 @@ def test_emergency_stop_without_transport_raises():
         c.emergency_stop()
 
 
-def test_set_turnout_fadr_4_position_1():
-    c = Z21Client("192.0.2.10")
-    t = FakeTransport()
-    c._attach_transport(t)
-    c.set_turnout(4, 1)
-    assert t.sent == [protocol.build_turnout_set(4, 1)]
+def test_set_turnout_sends_activate_immediately():
+    async def scenario():
+        c = Z21Client("192.0.2.10")
+        t = FakeTransport()
+        c._attach_transport(t)
+        c.set_turnout(4, 1)
+        # Activate output 2 (Q=1) goes out immediately; deactivate is scheduled.
+        assert t.sent == [protocol.build_turnout_set(4, 1, activate=True)]
+        return c
+
+    run(scenario())
 
 
-def test_set_turnout_with_q_bit():
-    c = Z21Client("192.0.2.10")
-    t = FakeTransport()
-    c._attach_transport(t)
-    c.set_turnout(4, 1, q=True)
-    assert t.sent == [protocol.build_turnout_set(4, 1, q=True)]
+def test_set_turnout_deactivate_follows_after_delay():
+    async def scenario():
+        c = Z21Client("192.0.2.10")
+        t = FakeTransport()
+        c._attach_transport(t)
+        # Shrink the delay so the test doesn't wait 150 ms.
+        c_mod_delay = client_mod.TURNOUT_DEACTIVATE_DELAY
+        client_mod.TURNOUT_DEACTIVATE_DELAY = 0.01
+        try:
+            c.set_turnout(4, 1)
+            await asyncio.sleep(0.05)
+        finally:
+            client_mod.TURNOUT_DEACTIVATE_DELAY = c_mod_delay
+        assert t.sent == [
+            protocol.build_turnout_set(4, 1, activate=True),
+            protocol.build_turnout_set(4, 1, activate=False),
+        ]
+
+    run(scenario())
+
+
+def test_set_turnout_re_throw_cancels_pending_deactivate():
+    async def scenario():
+        c = Z21Client("192.0.2.10")
+        t = FakeTransport()
+        c._attach_transport(t)
+        delay = client_mod.TURNOUT_DEACTIVATE_DELAY
+        client_mod.TURNOUT_DEACTIVATE_DELAY = 0.05
+        try:
+            c.set_turnout(4, 1)  # activate output 2
+            c.set_turnout(4, 0)  # re-throw to output 1 before the first deactivates
+            await asyncio.sleep(0.1)
+        finally:
+            client_mod.TURNOUT_DEACTIVATE_DELAY = delay
+        # The stale deactivate for output 2 must not fire; only output 1's does.
+        assert t.sent == [
+            protocol.build_turnout_set(4, 1, activate=True),
+            protocol.build_turnout_set(4, 0, activate=True),
+            protocol.build_turnout_set(4, 0, activate=False),
+        ]
+
+    run(scenario())
+
+
+def test_close_cancels_pending_turnout_deactivate():
+    async def scenario():
+        c = Z21Client("192.0.2.10")
+        t = FakeTransport()
+        c._attach_transport(t)
+        client_mod.TURNOUT_DEACTIVATE_DELAY = 0.05
+        c.set_turnout(4, 1)
+        await c.close()
+        await asyncio.sleep(0.1)
+        # After close only the activate + the LOGOFF from close should appear;
+        # no deactivate fired into the torn-down transport.
+        deactivate = protocol.build_turnout_set(4, 1, activate=False)
+        assert deactivate not in t.sent
+
+    run(scenario())
 
 
 def test_set_turnout_without_transport_raises():
-    c = Z21Client("192.0.2.10")
-    with pytest.raises(RuntimeError):
-        c.set_turnout(0, 0)
+    async def scenario():
+        c = Z21Client("192.0.2.10")
+        with pytest.raises(RuntimeError):
+            c.set_turnout(0, 0)
+
+    run(scenario())
 
 
 # --- request_turnout_info ---------------------------------------------------
@@ -222,7 +283,7 @@ def test_request_turnout_info_returns_future():
             # The request datagram uses header 0x40 at bytes 2-4 (the GET
             # command), while the response uses HDR_TURNOUT_INFO (0x43).
             if header == 0x40:
-                payload = struct.pack("<BBB", 0x00, 0x04, 0x08)
+                payload = struct.pack("<BBB", 0x00, 0x04, 0x02)
                 client._on_datagram(
                     protocol.build_frame(protocol.HDR_TURNOUT_INFO, payload)
                 )
@@ -253,7 +314,7 @@ def test_turnout_info_broadcast_reaches_subscriber():
     received: list[tuple[int, object]] = []
     unsub = c.subscribe(lambda h, d: received.append((h, d)))
 
-    turnout_payload = struct.pack("<BBB", 0x00, 0x04, 0x08)
+    turnout_payload = struct.pack("<BBB", 0x00, 0x04, 0x02)
     c._on_datagram(protocol.build_frame(protocol.HDR_TURNOUT_INFO, turnout_payload))
 
     assert len(received) == 1

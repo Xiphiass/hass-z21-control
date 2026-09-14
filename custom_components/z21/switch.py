@@ -33,7 +33,6 @@ from .const import (
     CONF_TURNOUTS,
     CONF_TURNOUT_FADR,
     CONF_TURNOUT_NAME,
-    CONF_TURNOUT_Q_MODE,
     DOMAIN,
 )
 from .coordinator import Z21Coordinator
@@ -80,7 +79,6 @@ async def async_setup_entry(
                 entry=entry,
                 fadr=turnout[CONF_TURNOUT_FADR],
                 name=turnout[CONF_TURNOUT_NAME],
-                q_mode=bool(turnout[CONF_TURNOUT_Q_MODE]),
             )
         )
     async_add_entities(entities)
@@ -123,10 +121,12 @@ class Z21Switch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
 class Z21TurnoutSwitch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
     """A turnout (Weiche) exposed as a switch entity.
 
-    ``is_on`` reflects the last known broadcast position (0=closed, 1=diverged).
-    ``async_turn_on()`` sends ``set_turnout(fadr, 1, q)``.
-    ``async_turn_off()`` sends ``set_turnout(fadr, 0, q)``.
-    State is unavailable before the first position is known (broadcast or poll).
+    The Z21 protocol deliberately speaks only of "output 1" and "output 2", not
+    "straight"/"branching" — the physical position depends on cabling the
+    command station can't know (spec 5). Here ``on`` maps to output 2 and ``off``
+    to output 1. ``is_on`` reflects the last known position (broadcast or poll);
+    it is None (unknown) until the first position is reported. Each throw sends
+    an Activate followed by a paired Deactivate — the client owns that timing.
     """
 
     _attr_has_entity_name = True
@@ -137,11 +137,9 @@ class Z21TurnoutSwitch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
         entry: ConfigEntry,
         fadr: int,
         name: str,
-        q_mode: bool,
     ) -> None:
         super().__init__(coordinator)
         self._fadr = fadr
-        self._q_mode = q_mode
         serial = entry.data[CONF_SERIAL]
         self._attr_unique_id = f"{serial}_turnout_{fadr}"
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, str(serial))})
@@ -156,12 +154,12 @@ class Z21TurnoutSwitch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
         return pos == 1
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Switch the turnout to diverged (position 1)."""
-        self.coordinator.client.set_turnout(self._fadr, 1, self._q_mode)
+        """Switch the turnout to output 2."""
+        self.coordinator.client.set_turnout(self._fadr, 1)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Switch the turnout to closed (position 0)."""
-        self.coordinator.client.set_turnout(self._fadr, 0, self._q_mode)
+        """Switch the turnout to output 1."""
+        self.coordinator.client.set_turnout(self._fadr, 0)
 
     async def async_added_to_hass(self) -> None:
         """Poll the initial position on entity creation."""

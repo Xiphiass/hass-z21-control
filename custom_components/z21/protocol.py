@@ -174,26 +174,35 @@ def build_turnout_info_get(fadr: int) -> bytes:
     return build_xbus(0x43, bytes((fadr_ms, fadr_ls)))
 
 
-def build_turnout_set(fadr: int, position: int, q: bool = False) -> bytes:
+def build_turnout_set(
+    fadr: int, output: int, activate: bool, q: bool = True
+) -> bytes:
     """LAN_X_SET_TURNOUT command (5.2).
 
-    Switches a turnout by its function address.
+    Switches a turnout by its function address. DB2 is ``10Q0A00P`` where A and
+    P are independent bits: A activates (1) or deactivates (0) the selected
+    output, and P selects output 1 (``0``) or output 2 (``1``). Throwing a
+    turnout is therefore two commands — Activate the chosen output, then
+    Deactivate it (spec 5.2.1); the client owns that pairing and its timing.
 
     Args:
         fadr: Raw function address (0–65534).
-        position: 0 = output 1 (deactivate), 1 = output 2 (activate).
-        q: If True, queue mode (Z21 FW 1.24+).
+        output: 0 = output 1, 1 = output 2 (the P bit).
+        activate: True activates the output (A=1), False deactivates it (A=0).
+        q: Queue mode (spec 5.2.2, Z21 FW 1.24+). Defaults to True — the
+            integration always uses the queue so it need not strictly serialize
+            switching commands across turnouts.
 
-    Example for FAdr=4, position=1 (activate, output 2), Q=0::
+    Example for FAdr=4, output=1 (output 2), activate, Q=1::
 
-        09 00 40 00 53 00 04 89 DE
+        09 00 40 00 53 00 04 A9 FE
 
     """
     fadr_ms = (fadr >> 8) & 0xFF
     fadr_ls = fadr & 0xFF
-    a = 1 if position else 0
     q_bit = 1 if q else 0
-    db2 = 0x80 | (q_bit << 5) | (a << 3) | position
+    a_bit = 1 if activate else 0
+    db2 = 0x80 | (q_bit << 5) | (a_bit << 3) | (output & 0x01)
     return build_xbus(0x53, bytes((fadr_ms, fadr_ls, db2)))
 
 
@@ -252,18 +261,16 @@ def _decode_turnout_info(payload: bytes) -> TurnoutInfo | None:
     """Decode a turnout info payload; ``None`` if too short."""
     if len(payload) < 3:
         return None
-    fadr_ms, fadr_ls, zz = struct.unpack_from("<BBB", payload, 0)
+    fadr_ms, fadr_ls, db2 = struct.unpack_from("<BBB", payload, 0)
     fadr = (fadr_ms << 8) | fadr_ls
-    zz_val = zz >> 2  # bits 2–7: 0=not switched, 1=position 0, 2=position 1, 3=invalid
-    if zz_val == 0:
-        position: int | None = None  # not switched yet
-    elif zz_val == 1:
-        position = 0  # P=0
-    elif zz_val == 2:
-        position = 1  # P=1
+    zz = db2 & 0x03  # bits 0–1: 0=not switched, 1=output 1, 2=output 2, 3=invalid
+    if zz == 1:
+        position: int | None = 0  # P=0 (output 1)
+    elif zz == 2:
+        position = 1  # P=1 (output 2)
     else:
-        position = None  # ZZ=11 is invalid
-    return TurnoutInfo(fadr=fadr, position=position, invalid=zz_val == 3)
+        position = None  # ZZ=00 not switched yet, or ZZ=11 invalid
+    return TurnoutInfo(fadr=fadr, position=position, invalid=zz == 3)
 
 
 @dataclass(frozen=True)
