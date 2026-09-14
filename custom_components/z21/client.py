@@ -28,6 +28,11 @@ from custom_components.z21 import protocol
 
 DEFAULT_PORT = 21105
 
+# Delay between a turnout's Activate and its paired Deactivate (spec 5.2.1: the
+# Activate is output until the client sends the corresponding Deactivate).
+# Module-level so tests can shrink it.
+TURNOUT_DEACTIVATE_DELAY = 0.15
+
 _LOGGER = logging.getLogger(__name__)
 
 # A receive handler: called with the decoded dataset's header and the decoded
@@ -82,6 +87,10 @@ class Z21Client:
         # Header -> one-shot future awaiting the next response with that header.
         # The Z21 has no request IDs, so responses correlate only by header.
         self._pending: dict[int, asyncio.Future] = {}
+        # FAdr -> scheduled deactivate for an in-flight turnout throw. Keyed by
+        # FAdr so a rapid re-throw of the same turnout replaces its pending
+        # deactivate; different turnouts run independent timers (Q=1 allows it).
+        self._turnout_timers: dict[int, asyncio.TimerHandle] = {}
 
     # --- Lifecycle ----------------------------------------------------------
 
@@ -150,6 +159,11 @@ class Z21Client:
         """
         if self._transport is None:
             return
+        # Cancel any pending turnout deactivates so none fire into a torn-down
+        # transport after close.
+        for timer in self._turnout_timers.values():
+            timer.cancel()
+        self._turnout_timers.clear()
         try:
             self.logoff()
         except Exception:  # pragma: no cover - defensive
@@ -199,11 +213,36 @@ class Z21Client:
         """Send LAN_X_SET_STOP (2.13) — halt all locos, leave track power on."""
         self._transport_send(protocol.build_set_stop())
 
-    def set_turnout(
-        self, fadr: int, position: int, q: bool = False
-    ) -> None:
-        """Send LAN_X_SET_TURNOUT (5.2)."""
-        self._transport_send(protocol.build_turnout_set(fadr, position, q))
+    def set_turnout(self, fadr: int, output: int) -> None:
+        """Throw a turnout (LAN_X_SET_TURNOUT, 5.2) using the Z21 queue (Q=1).
+
+        Sends the Activate for ``output`` immediately, then schedules the paired
+        Deactivate after :data:`TURNOUT_DEACTIVATE_DELAY` (spec 5.2.1 requires a
+        Deactivate to follow every Activate). A pending deactivate for the same
+        ``fadr`` is cancelled first, so a rapid re-throw doesn't fire a stale
+        deactivate for the previous output.
+        """
+        pending = self._turnout_timers.pop(fadr, None)
+        if pending is not None:
+            pending.cancel()
+
+        self._transport_send(
+            protocol.build_turnout_set(fadr, output, activate=True)
+        )
+
+        loop = self._loop or asyncio.get_running_loop()
+
+        def _deactivate() -> None:
+            self._turnout_timers.pop(fadr, None)
+            if self._transport is None:
+                return
+            self._transport_send(
+                protocol.build_turnout_set(fadr, output, activate=False)
+            )
+
+        self._turnout_timers[fadr] = loop.call_later(
+            TURNOUT_DEACTIVATE_DELAY, _deactivate
+        )
 
     def request_turnout_info(self, fadr: int) -> asyncio.Future:
         """Send LAN_X_GET_TURNOUT_INFO (5.1) and return a Future for the response."""

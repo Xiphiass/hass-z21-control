@@ -25,7 +25,6 @@ from custom_components.z21.const import (
     CONF_TURNOUTS,
     CONF_TURNOUT_FADR,
     CONF_TURNOUT_NAME,
-    CONF_TURNOUT_Q_MODE,
     DOMAIN,
 )
 
@@ -42,12 +41,10 @@ _TURNOUTS = [
     {
         CONF_TURNOUT_NAME: "Switch A",
         CONF_TURNOUT_FADR: 4,
-        CONF_TURNOUT_Q_MODE: 0,
     },
     {
         CONF_TURNOUT_NAME: "Switch B",
         CONF_TURNOUT_FADR: 7,
-        CONF_TURNOUT_Q_MODE: 1,
     },
 ]
 
@@ -72,11 +69,10 @@ def _system_state(central_state: int = 0) -> bytes:
 def _turnout_info_response(fadr: int, position: int) -> bytes:
     """Build a LAN_X_TURNOUT_INFO datagram.
 
-    The ZZ byte encodes position: zz_val = zz >> 2 where
-    zz_val=1 -> position 0, zz_val=2 -> position 1, zz_val=0 -> None.
+    DB2 is 000000ZZ (spec 5.3): ZZ=01 -> position 0 (output 1),
+    ZZ=10 -> position 1 (output 2).
     """
-    zz_val = position + 1  # 0->1, 1->2
-    zz = zz_val << 2
+    zz = position + 1  # 0->0b01, 1->0b10
     payload = struct.pack("<BBB", (fadr >> 8) & 0xFF, fadr & 0xFF, zz)
     return protocol.build_frame(protocol.HDR_TURNOUT_INFO, payload)
 
@@ -195,19 +191,19 @@ async def test_turnout_is_on_reflects_position(hass: HomeAssistant, monkeypatch)
     assert state is not None
     assert state.state == "unknown"
 
-    # Simulate a turnout info broadcast for FAdr 4 -> position 1
+    # Simulate a turnout info broadcast for FAdr 4 -> position 1 (ZZ=10)
     client = transports[0]._client
     client._on_datagram(
-        protocol.build_frame(protocol.HDR_TURNOUT_INFO, b"\x00\x04\x08")
+        protocol.build_frame(protocol.HDR_TURNOUT_INFO, b"\x00\x04\x02")
     )
     await hass.async_block_till_done()
 
     state = hass.states.get(entity_id)
     assert state.state == "on"
 
-    # Simulate position change to 0
+    # Simulate position change to 0 (ZZ=01)
     client._on_datagram(
-        protocol.build_frame(protocol.HDR_TURNOUT_INFO, b"\x00\x04\x04")
+        protocol.build_frame(protocol.HDR_TURNOUT_INFO, b"\x00\x04\x01")
     )
     await hass.async_block_till_done()
     assert hass.states.get(entity_id).state == "off"
@@ -231,7 +227,6 @@ async def test_turnout_unavailable_before_position(hass: HomeAssistant, monkeypa
                 {
                     CONF_TURNOUT_NAME: "No Info Turnout",
                     CONF_TURNOUT_FADR: 99,
-                    CONF_TURNOUT_Q_MODE: 0,
                 }
             ],
         },
@@ -253,8 +248,8 @@ async def test_turnout_unavailable_before_position(hass: HomeAssistant, monkeypa
     assert state.state == "unknown"
 
 
-async def test_turnon_sends_set_turnout(hass: HomeAssistant, monkeypatch) -> None:
-    """Calling turn_on sends set_turnout(fadr, 1, q)."""
+async def test_turnon_sends_activate(hass: HomeAssistant, monkeypatch) -> None:
+    """Calling turn_on sends the Activate for output 2 immediately."""
     transports = _install_client(monkeypatch, responder=_responder())
     entry = _mock_entry()
     entry.add_to_hass(hass)
@@ -273,14 +268,13 @@ async def test_turnon_sends_set_turnout(hass: HomeAssistant, monkeypatch) -> Non
         "switch", "turn_on", {"entity_id": entity_id}, blocking=True
     )
 
-    # Check that set_turnout was called with fadr=4, position=1, q=False
-    # The wire format for set_turnout(4, 1, False) is known from protocol tests
-    expected = protocol.build_turnout_set(4, 1, False)
+    # turn_on -> Activate output 2 (Q=1) for FAdr 4, sent immediately.
+    expected = protocol.build_turnout_set(4, 1, activate=True)
     assert expected in transport.sent
 
 
-async def test_turnoff_sends_set_turnout(hass: HomeAssistant, monkeypatch) -> None:
-    """Calling turn_off sends set_turnout(fadr, 0, q)."""
+async def test_turnoff_sends_activate(hass: HomeAssistant, monkeypatch) -> None:
+    """Calling turn_off sends the Activate for output 1 immediately."""
     transports = _install_client(monkeypatch, responder=_responder())
     entry = _mock_entry()
     entry.add_to_hass(hass)
@@ -299,9 +293,50 @@ async def test_turnoff_sends_set_turnout(hass: HomeAssistant, monkeypatch) -> No
         "switch", "turn_off", {"entity_id": entity_id}, blocking=True
     )
 
-    # FAdr 7, position 0, q=True (from _TURNOUTS)
-    expected = protocol.build_turnout_set(7, 0, True)
+    # turn_off -> Activate output 1 (Q=1) for FAdr 7, sent immediately.
+    expected = protocol.build_turnout_set(7, 0, activate=True)
     assert expected in transport.sent
+
+
+async def test_turnout_deactivate_follows_activate(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """A throw pairs its Activate with a Deactivate for the same output."""
+    import asyncio
+
+    from custom_components.z21 import client as client_module
+
+    # Shrink the deactivate delay so the test doesn't wait 150 ms.
+    monkeypatch.setattr(client_module, "TURNOUT_DEACTIVATE_DELAY", 0.01)
+
+    transports = _install_client(monkeypatch, responder=_responder())
+    entry = _mock_entry()
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    transport = transports[0]
+    transport.sent.clear()
+
+    er_registry = er.async_get(hass)
+    entity_id = er_registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_turnout_4")
+    assert entity_id is not None
+
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": entity_id}, blocking=True
+    )
+
+    activate = protocol.build_turnout_set(4, 1, activate=True)
+    deactivate = protocol.build_turnout_set(4, 1, activate=False)
+    assert activate in transport.sent
+    assert deactivate not in transport.sent  # not yet — it's scheduled
+
+    await asyncio.sleep(0.05)
+    await hass.async_block_till_done()
+    assert deactivate in transport.sent
+    # Activate precedes its Deactivate.
+    assert transport.sent.index(activate) < transport.sent.index(deactivate)
 
 
 async def test_turnout_removed_on_options_update(hass: HomeAssistant, monkeypatch) -> None:

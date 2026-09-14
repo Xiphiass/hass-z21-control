@@ -75,7 +75,8 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         # True while past the staleness window, so the recovery edge (re-send of
         # broadcast flags on the first datagram after silence) fires exactly once.
         self._stale: bool = False
-        # Maps turnout index (int) to position (int: 0=closed/straight, 1=diverged/curved, None=not switched yet).
+        # Maps turnout FAdr to position (0=output 1, 1=output 2, None=not
+        # switched yet). The Z21 speaks only of outputs, not straight/branching.
         self._turnout_positions: dict[int, int | None] = {}
 
     async def async_setup(self) -> None:
