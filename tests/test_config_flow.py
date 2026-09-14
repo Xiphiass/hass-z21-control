@@ -11,6 +11,7 @@ tests are HA-coupled and run via pytest-homeassistant-custom-component
 from __future__ import annotations
 
 import struct
+from unittest.mock import patch
 
 import pytest
 from homeassistant.config_entries import SOURCE_USER
@@ -26,16 +27,15 @@ from custom_components.z21.const import (
     CONF_FW_VERSION,
     CONF_HW_TYPE,
     CONF_SERIAL,
-    DOMAIN,
-    format_fw_version,
-    hw_type_name,
-)
-from custom_components.z21.config_flow import (
-    CONF_TURNOUTS,
     CONF_TURNOUT_FADR,
+    CONF_TURNOUT_ID,
     CONF_TURNOUT_NAME,
+    CONF_TURNOUTS,
+    DOMAIN,
     TURNOUT_FADR_MAX,
     TURNOUT_FADR_MIN,
+    format_fw_version,
+    hw_type_name,
 )
 
 _HOST = "192.0.2.10"
@@ -200,192 +200,309 @@ async def test_user_flow_duplicate_aborts(hass: HomeAssistant, monkeypatch) -> N
     assert len(hass.config_entries.async_entries(DOMAIN)) == 1
 
 
-async def test_options_flow_empty_list(hass: HomeAssistant) -> None:
-    """Options flow starts with an empty turnout list."""
-    entry = MockConfigEntry(
+def _entry(turnouts: list[dict] | None = None) -> MockConfigEntry:
+    """A configured Z21 entry, optionally seeded with turnouts."""
+    return MockConfigEntry(
         domain=DOMAIN,
-        unique_id="12345",
+        unique_id=str(_SERIAL),
         data={
             CONF_HOST: _HOST,
             CONF_SERIAL: _SERIAL,
             CONF_HW_TYPE: _HW_TYPE,
             CONF_FW_VERSION: _FW_VERSION,
         },
-    )
-    entry.add_to_hass(hass)
-
-    result = await hass.config_entries.options.async_init(
-        entry.entry_id,
+        options={CONF_TURNOUTS: turnouts} if turnouts is not None else {},
     )
 
-    assert result["type"] is FlowResultType.FORM
+
+async def _open_menu(hass: HomeAssistant, entry: MockConfigEntry):
+    """Init the options flow and return the menu result."""
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
+    return result
 
 
-async def test_options_flow_add_turnout(hass: HomeAssistant) -> None:
-    """Adding a valid turnout succeeds."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        unique_id="12345",
-        data={
-            CONF_HOST: _HOST,
-            CONF_SERIAL: _SERIAL,
-            CONF_HW_TYPE: _HW_TYPE,
-            CONF_FW_VERSION: _FW_VERSION,
-        },
+async def _pick(hass: HomeAssistant, flow_id: str, step: str):
+    """Choose a menu option by its next step id."""
+    return await hass.config_entries.options.async_configure(
+        flow_id, {"next_step_id": step}
     )
+
+
+async def _finish(hass: HomeAssistant, flow_id: str):
+    """Choose Done, suppressing the real reload OptionsFlowWithReload schedules.
+
+    The entry is only ``add_to_hass``'d (never set up) in these tests, so an
+    actual reload would try to open a real socket. We only care that the options
+    were persisted; the reload itself is exercised in
+    ``test_options_flow_done_reloads_entry``.
+    """
+    with patch.object(hass.config_entries, "async_schedule_reload"):
+        return await _pick(hass, flow_id, "done")
+
+
+async def test_options_flow_menu_hides_edit_delete_when_empty(
+    hass: HomeAssistant,
+) -> None:
+    """With no turnouts, the menu offers only add and done."""
+    entry = _entry()
     entry.add_to_hass(hass)
 
-    # Step 1: init -> add
-    result = await hass.config_entries.options.async_init(
-        entry.entry_id,
-    )
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {"action": "add"},
-    )
+    result = await _open_menu(hass, entry)
+    assert set(result["menu_options"]) == {"add", "done"}
 
+
+async def test_options_flow_menu_shows_edit_delete_when_present(
+    hass: HomeAssistant,
+) -> None:
+    """With turnouts, the menu offers edit and delete too."""
+    entry = _entry([{CONF_TURNOUT_NAME: "A", CONF_TURNOUT_FADR: 4}])
+    entry.add_to_hass(hass)
+
+    result = await _open_menu(hass, entry)
+    assert set(result["menu_options"]) == {"add", "edit_select", "delete_select", "done"}
+
+
+async def test_options_flow_add_then_done(hass: HomeAssistant) -> None:
+    """Add a turnout, then Done persists it (with a stable id)."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+
+    result = await _open_menu(hass, entry)
+    result = await _pick(hass, result["flow_id"], "add")
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "add_turnout"
+    assert result["step_id"] == "add"
 
-    # Step 2: submit turnout data
+    # Submit the add form -> back to the menu.
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {
-            CONF_TURNOUT_NAME: "Turnout 1",
-            CONF_TURNOUT_FADR: 100,
-        },
+        {CONF_TURNOUT_NAME: "Turnout 1", CONF_TURNOUT_FADR: 100},
     )
+    assert result["type"] is FlowResultType.MENU
 
+    # Done -> persist.
+    result = await _finish(hass, result["flow_id"])
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"][CONF_TURNOUTS] == [
-        {
-            CONF_TURNOUT_NAME: "Turnout 1",
-            CONF_TURNOUT_FADR: 100,
-        }
-    ]
+    turnouts = result["data"][CONF_TURNOUTS]
+    assert len(turnouts) == 1
+    assert turnouts[0][CONF_TURNOUT_NAME] == "Turnout 1"
+    assert turnouts[0][CONF_TURNOUT_FADR] == 100
+    assert turnouts[0][CONF_TURNOUT_ID]  # stable id assigned
 
 
 async def test_options_flow_duplicate_fadr_rejected(hass: HomeAssistant) -> None:
-    """Adding a turnout with a duplicate FAdr is rejected."""
-    entry = MockConfigEntry(
-                domain=DOMAIN,
-                unique_id="12345",
-                data={
-                    CONF_HOST: _HOST,
-                    CONF_SERIAL: _SERIAL,
-                    CONF_HW_TYPE: _HW_TYPE,
-                    CONF_FW_VERSION: _FW_VERSION,
-                },
-                options={
-                    CONF_TURNOUTS: [
-                        {
-                            CONF_TURNOUT_NAME: "Turnout 1",
-                            CONF_TURNOUT_FADR: 100,
-                        }
-                    ],
-                },
-            )
+    """Adding a turnout with a duplicate FAdr shows the duplicate_address error."""
+    entry = _entry([{CONF_TURNOUT_NAME: "Turnout 1", CONF_TURNOUT_FADR: 100}])
     entry.add_to_hass(hass)
 
-    result = await hass.config_entries.options.async_init(
-        entry.entry_id,
-    )
+    result = await _open_menu(hass, entry)
+    result = await _pick(hass, result["flow_id"], "add")
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {"action": "add"},
-    )
-
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {
-            CONF_TURNOUT_NAME: "Turnout 2",
-            CONF_TURNOUT_FADR: 100,  # duplicate
-        },
+        {CONF_TURNOUT_NAME: "Turnout 2", CONF_TURNOUT_FADR: 100},  # duplicate
     )
 
     assert result["type"] is FlowResultType.FORM
-    assert "Duplicate" in str(result.get("errors", {}))
+    assert result["errors"] == {"base": "duplicate_address"}
 
 
-async def test_options_flow_out_of_range_fadr(hass: HomeAssistant) -> None:
-    """Adding a turnout with FAdr outside valid range is rejected."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        unique_id="12345",
-        data={
-            CONF_HOST: _HOST,
-            CONF_SERIAL: _SERIAL,
-            CONF_HW_TYPE: _HW_TYPE,
-            CONF_FW_VERSION: _FW_VERSION,
-        },
-    )
+async def test_options_flow_edit_turnout(hass: HomeAssistant) -> None:
+    """Editing a turnout updates its name and address."""
+    entry = _entry([{CONF_TURNOUT_NAME: "Old", CONF_TURNOUT_FADR: 100}])
     entry.add_to_hass(hass)
 
-    result = await hass.config_entries.options.async_init(
-        entry.entry_id,
-    )
+    result = await _open_menu(hass, entry)
+    result = await _pick(hass, result["flow_id"], "edit_select")
+    assert result["step_id"] == "edit_select"
+
+    # Pick the (only) turnout by its stable id. The seeded turnout had no id;
+    # the flow backfills one, so read the value offered by the select schema.
+    options = result["data_schema"].schema[CONF_TURNOUT_ID].config["options"]
+    turnout_id = options[0]["value"]
+
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {"action": "add"},
+        result["flow_id"], {CONF_TURNOUT_ID: turnout_id}
     )
+    assert result["step_id"] == "edit"
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {
-            CONF_TURNOUT_NAME: "Bad Turnout",
-            CONF_TURNOUT_FADR: 65535,  # exceeds max
-        },
+        {CONF_TURNOUT_NAME: "New", CONF_TURNOUT_FADR: 200},
     )
+    assert result["type"] is FlowResultType.MENU
 
-    assert result["type"] is FlowResultType.FORM
-    assert "must be between" in str(result.get("errors", {}))
+    result = await _finish(hass, result["flow_id"])
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    turnouts = result["data"][CONF_TURNOUTS]
+    assert len(turnouts) == 1
+    assert turnouts[0][CONF_TURNOUT_NAME] == "New"
+    assert turnouts[0][CONF_TURNOUT_FADR] == 200
 
 
 async def test_options_flow_delete_turnout(hass: HomeAssistant) -> None:
     """Deleting a turnout removes it from the list."""
-    entry = MockConfigEntry(
-            domain=DOMAIN,
-            unique_id="12345",
-            data={
-                CONF_HOST: _HOST,
-                CONF_SERIAL: _SERIAL,
-                CONF_HW_TYPE: _HW_TYPE,
-                CONF_FW_VERSION: _FW_VERSION,
-            },
-            options={
-                CONF_TURNOUTS: [
-                    {
-                        CONF_TURNOUT_NAME: "Turnout 1",
-                        CONF_TURNOUT_FADR: 100,
-                    },
-                    {
-                        CONF_TURNOUT_NAME: "Turnout 2",
-                        CONF_TURNOUT_FADR: 200,
-                    },
-                ],
-            },
-        )
+    entry = _entry(
+        [
+            {CONF_TURNOUT_NAME: "Turnout 1", CONF_TURNOUT_FADR: 100},
+            {CONF_TURNOUT_NAME: "Turnout 2", CONF_TURNOUT_FADR: 200},
+        ]
+    )
     entry.add_to_hass(hass)
 
-    # Step 1: init -> delete first turnout
-    result = await hass.config_entries.options.async_init(
-        entry.entry_id,
+    result = await _open_menu(hass, entry)
+    result = await _pick(hass, result["flow_id"], "delete_select")
+    assert result["step_id"] == "delete_select"
+
+    # Delete the first turnout by its stable id.
+    options = result["data_schema"].schema[CONF_TURNOUT_ID].config["options"]
+    first_id = options[0]["value"]
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_TURNOUT_ID: first_id}
+    )
+    assert result["type"] is FlowResultType.MENU
+
+    result = await _finish(hass, result["flow_id"])
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    turnouts = result["data"][CONF_TURNOUTS]
+    assert len(turnouts) == 1
+    assert turnouts[0][CONF_TURNOUT_FADR] == 200
+
+
+async def test_options_flow_edit_address_migrates_entity(
+    hass: HomeAssistant,
+) -> None:
+    """Editing a turnout's FAdr renames its switch entity's unique_id."""
+    from homeassistant.helpers import entity_registry as er
+
+    entry = _entry(
+        [{CONF_TURNOUT_NAME: "A", CONF_TURNOUT_FADR: 100, CONF_TURNOUT_ID: "abc"}]
+    )
+    entry.add_to_hass(hass)
+
+    # Pre-register the switch entity at the old FAdr-based unique_id.
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "switch",
+        DOMAIN,
+        f"{_SERIAL}_turnout_100",
+        config_entry=entry,
+    )
+
+    result = await _open_menu(hass, entry)
+    result = await _pick(hass, result["flow_id"], "edit_select")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_TURNOUT_ID: "abc"}
     )
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {"action": "delete_0"},
+        {CONF_TURNOUT_NAME: "A", CONF_TURNOUT_FADR: 200},
+    )
+    result = await _finish(hass, result["flow_id"])
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+    # The entity now carries the new FAdr-based unique_id; the old one is gone.
+    assert (
+        registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_turnout_200")
+        is not None
+    )
+    assert (
+        registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_turnout_100")
+        is None
     )
 
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "init"
 
-    # Step 2: save
+async def test_options_flow_swap_addresses_migrates_both(
+    hass: HomeAssistant,
+) -> None:
+    """Swapping two turnouts' addresses migrates both entities without collision."""
+    from homeassistant.helpers import entity_registry as er
+
+    entry = _entry(
+        [
+            {CONF_TURNOUT_NAME: "A", CONF_TURNOUT_FADR: 100, CONF_TURNOUT_ID: "a"},
+            {CONF_TURNOUT_NAME: "B", CONF_TURNOUT_FADR: 200, CONF_TURNOUT_ID: "b"},
+        ]
+    )
+    entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "switch", DOMAIN, f"{_SERIAL}_turnout_100", config_entry=entry
+    )
+    registry.async_get_or_create(
+        "switch", DOMAIN, f"{_SERIAL}_turnout_200", config_entry=entry
+    )
+
+    # Move B off 200 first (200 -> 300), then A onto 200 (100 -> 200). Without a
+    # collision-safe migration, A's rename to 200 would raise while B still holds
+    # a stale 200 entity.
+    result = await _open_menu(hass, entry)
+    result = await _pick(hass, result["flow_id"], "edit_select")
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {},
+        result["flow_id"], {CONF_TURNOUT_ID: "b"}
     )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_TURNOUT_NAME: "B", CONF_TURNOUT_FADR: 300}
+    )
+    result = await _pick(hass, result["flow_id"], "edit_select")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_TURNOUT_ID: "a"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_TURNOUT_NAME: "A", CONF_TURNOUT_FADR: 200}
+    )
+    result = await _finish(hass, result["flow_id"])
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+    # Both entities carried over to their new addresses.
+    assert (
+        registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_turnout_200")
+        is not None
+    )
+    assert (
+        registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_turnout_300")
+        is not None
+    )
+    assert (
+        registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_turnout_100")
+        is None
+    )
+
+
+async def test_options_flow_done_without_changes_skips_reload(
+    hass: HomeAssistant,
+) -> None:
+    """A look-only Done must not reload (would drop the live Z21 connection)."""
+    entry = _entry([{CONF_TURNOUT_NAME: "A", CONF_TURNOUT_FADR: 4}])
+    entry.add_to_hass(hass)
+
+    result = await _open_menu(hass, entry)
+    with patch.object(hass.config_entries, "async_schedule_reload") as mock_reload:
+        result = await _pick(hass, result["flow_id"], "done")
+        await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert len(result["data"][CONF_TURNOUTS]) == 1
-    assert result["data"][CONF_TURNOUTS][0][CONF_TURNOUT_FADR] == 200
+    mock_reload.assert_not_called()
+
+
+async def test_options_flow_done_reloads_entry(hass: HomeAssistant) -> None:
+    """Finishing the options flow reloads the integration (OptionsFlowWithReload)."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+
+    result = await _open_menu(hass, entry)
+    result = await _pick(hass, result["flow_id"], "add")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_TURNOUT_NAME: "T", CONF_TURNOUT_FADR: 5},
+    )
+
+    with patch.object(
+        hass.config_entries, "async_schedule_reload"
+    ) as mock_reload:
+        result = await _pick(hass, result["flow_id"], "done")
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    mock_reload.assert_called_once_with(entry.entry_id)

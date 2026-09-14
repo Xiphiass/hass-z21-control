@@ -17,12 +17,34 @@ from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     FlowResult,
-    OptionsFlow,
+    OptionsFlowWithReload,
 )
 from homeassistant.const import CONF_HOST
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+    TextSelector,
+)
+from homeassistant.util.uuid import random_uuid_hex
 
 from .client import Z21Client, Z21Timeout
-from .const import CONF_FW_VERSION, CONF_HW_TYPE, CONF_SERIAL, DOMAIN
+from .const import (
+    CONF_FW_VERSION,
+    CONF_HW_TYPE,
+    CONF_SERIAL,
+    CONF_TURNOUT_FADR,
+    CONF_TURNOUT_ID,
+    CONF_TURNOUT_NAME,
+    CONF_TURNOUTS,
+    DOMAIN,
+    TURNOUT_FADR_MAX,
+    TURNOUT_FADR_MIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,47 +55,24 @@ _CONNECT_TIMEOUT = 1.0
 _CONNECT_RETRIES = 2
 _CONNECT_BACKOFF = 0.3
 
-# Turnout config constants
-TURNOUT_FADR_MIN = 0
-TURNOUT_FADR_MAX = 65534
-CONF_TURNOUTS = "turnouts"
-CONF_TURNOUT_NAME = "name"
-CONF_TURNOUT_FADR = "fadr"
-
-
-def _validate_turnout_fadr_uniqueness(turnouts: list[dict]) -> list[dict]:
-    """Validate that FAdr values are unique across all turnouts."""
-    seen_fadr: dict[int, str] = {}
-    for t in turnouts:
-        fadr = t[CONF_TURNOUT_FADR]
-        if fadr in seen_fadr:
-            raise vol.Invalid(
-                f"Duplicate FAdr {fadr} (used by '{seen_fadr[fadr]}')",
-                path=[CONF_TURNOUTS],
-            )
-        seen_fadr[fadr] = t[CONF_TURNOUT_NAME]
-    return turnouts
-
-
-# Form schema: permissive (no range constraint) so HA's async_configure
-# doesn't raise before the handler can catch the error.
-TURNOUT_ITEM_SCHEMA = vol.Schema({
-    vol.Required(CONF_TURNOUT_NAME): str,
-    vol.Required(CONF_TURNOUT_FADR): vol.Coerce(int),
-})
-
-# Full validation schema with range + uniqueness checks.
-TURNOUT_SCHEMA = vol.Schema(
-    vol.All(
-        [TURNOUT_ITEM_SCHEMA],
-        vol.All(
-            vol.Range(min=TURNOUT_FADR_MIN, max=TURNOUT_FADR_MAX),
-            _validate_turnout_fadr_uniqueness,
-        ),
-    )
-)
-
 STEP_USER_DATA_SCHEMA = vol.Schema({vol.Required(CONF_HOST): str})
+
+# Add/edit form: a friendly name plus the numeric function address. The address
+# range is enforced by the NumberSelector; FAdr uniqueness needs the rest of the
+# list, so it is checked in the handler and surfaced as ``duplicate_address``.
+_TURNOUT_FORM_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_TURNOUT_NAME): TextSelector(),
+        vol.Required(CONF_TURNOUT_FADR): NumberSelector(
+            NumberSelectorConfig(
+                min=TURNOUT_FADR_MIN,
+                max=TURNOUT_FADR_MAX,
+                step=1,
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+    }
+)
 
 
 class Z21ConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -134,130 +133,239 @@ class Z21ConfigFlow(ConfigFlow, domain=DOMAIN):
     @staticmethod
     def async_get_options_flow(config_entry: ConfigEntry) -> Z21OptionsFlow:
         """Get the options flow for this config entry."""
-        return Z21OptionsFlow(config_entry)
+        return Z21OptionsFlow()
 
 
-class Z21OptionsFlow(OptionsFlow):
-    """Handle options for the Z21 config entry."""
+class Z21OptionsFlow(OptionsFlowWithReload):
+    """Menu-driven turnout management for the Z21 config entry.
 
-    def __init__(self, entry: ConfigEntry) -> None:
-        self.entry = entry
-        self._turnouts: list[dict] = list(entry.options.get(CONF_TURNOUTS, []))
-        self._edit_index: int | None = None
+    Add / edit / delete turnouts from a menu that loops back after each action;
+    ``Done`` commits the working list to ``entry.options`` and (via
+    :class:`OptionsFlowWithReload`) schedules a single integration reload so the
+    switch platform picks up the new set. Each turnout carries a stable ``id``
+    independent of its FAdr, so it can be referenced across an address edit and
+    its switch entity migrated to the new FAdr-based unique_id.
+    """
+
+    def __init__(self) -> None:
+        # Lazily populated on the first init step from the live entry options.
+        self._turnouts: list[dict] | None = None
+        # id of the turnout currently being edited (set by edit_select).
+        self._selected_id: str | None = None
+
+    @property
+    def _working(self) -> list[dict]:
+        """The in-memory working copy of the turnout list.
+
+        Loaded once from ``entry.options`` and backfilled with a stable ``id``
+        for any legacy turnout that predates it; persisted only on ``Done``.
+        """
+        if self._turnouts is None:
+            self._turnouts = [
+                {**t, CONF_TURNOUT_ID: t.get(CONF_TURNOUT_ID) or random_uuid_hex()}
+                for t in self.config_entry.options.get(CONF_TURNOUTS, [])
+            ]
+        return self._turnouts
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Show the list of configured turnouts with add/edit/delete actions."""
-        if user_input is not None:
-            if "action" in user_input:
-                action = user_input["action"]
-                if action == "add":
-                    return await self.async_step_add_turnout()
-                if action.startswith("edit_"):
-                    idx = int(action.replace("edit_", ""))
-                    self._edit_index = idx
-                    return await self.async_step_edit_turnout()
-                if action.startswith("delete_"):
-                    idx = int(action.replace("delete_", ""))
-                    self._turnouts.pop(idx)
-                    return await self.async_step_init()
-            # Empty submission - save current state
-            self.hass.config_entries.async_update_entry(
-                self.entry,
-                options={CONF_TURNOUTS: self._turnouts},
-            )
-            return self.async_create_entry(data=self._save_options())
+        """Show the turnout menu: add, edit/delete (if any), and done."""
+        menu_options = ["add"]
+        if self._working:
+            menu_options += ["edit_select", "delete_select"]
+        menu_options.append("done")
+        return self.async_show_menu(step_id="init", menu_options=menu_options)
 
-        items: list[str] = []
-        for i, t in enumerate(self._turnouts):
-            label = f"{t[CONF_TURNOUT_NAME]} (FAdr {t[CONF_TURNOUT_FADR]})"
-            items.append(f"{i}. {label}")
-        if not items:
-            items.append("No turnouts configured.")
-
-        actions: list[str] = ["add"]
-        for i in range(len(self._turnouts)):
-            actions.append(f"edit_{i}")
-            actions.append(f"delete_{i}")
-
-        return self.async_show_form(
-            step_id="init",
-            data_schema=vol.Schema({
-                vol.Optional("action"): vol.In(actions),
-            }),
-            description_placeholders={"turnouts": "\n".join(items)},
-        )
-
-    async def async_step_add_turnout(
+    async def async_step_add(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Add a new turnout."""
+        """Add a new turnout, then return to the menu."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            try:
-                # Validate range first
-                fadr = user_input[CONF_TURNOUT_FADR]
-                if fadr < TURNOUT_FADR_MIN or fadr > TURNOUT_FADR_MAX:
-                    raise vol.Invalid(
-                        f"FAdr must be between {TURNOUT_FADR_MIN} and {TURNOUT_FADR_MAX}",
-                        path=[CONF_TURNOUT_FADR],
-                    )
-                # Validate uniqueness
-                test_list = list(self._turnouts) + [user_input]
-                _validate_turnout_fadr_uniqueness(test_list)
-                self._turnouts.append(user_input)
-                return self.async_create_entry(data=self._save_options())
-            except vol.Invalid as err:
-                errors["base"] = str(err)
+            error = self._validate_unique(user_input[CONF_TURNOUT_FADR])
+            if error is None:
+                self._working.append({
+                    CONF_TURNOUT_ID: random_uuid_hex(),
+                    CONF_TURNOUT_NAME: user_input[CONF_TURNOUT_NAME],
+                    CONF_TURNOUT_FADR: int(user_input[CONF_TURNOUT_FADR]),
+                })
+                return await self.async_step_init()
+            errors["base"] = error
 
         return self.async_show_form(
-            step_id="add_turnout",
-            data_schema=TURNOUT_ITEM_SCHEMA,
+            step_id="add",
+            data_schema=_TURNOUT_FORM_SCHEMA,
             errors=errors,
         )
 
-    async def async_step_edit_turnout(
+    async def async_step_edit_select(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Edit an existing turnout."""
-        errors: dict[str, str] = {}
-        if self._edit_index is None:
+        """Pick which turnout to edit."""
+        if not self._working:
+            return await self.async_step_init()
+        if user_input is not None:
+            self._selected_id = user_input[CONF_TURNOUT_ID]
+            return await self.async_step_edit()
+        return self.async_show_form(
+            step_id="edit_select",
+            data_schema=self._select_schema(),
+        )
+
+    async def async_step_edit(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Edit the selected turnout, then return to the menu."""
+        turnout = self._find(self._selected_id)
+        if turnout is None:
             return await self.async_step_init()
 
-        current = self._turnouts[self._edit_index]
-
+        errors: dict[str, str] = {}
         if user_input is not None:
-            try:
-                # Validate range first
-                fadr = user_input[CONF_TURNOUT_FADR]
-                if fadr < TURNOUT_FADR_MIN or fadr > TURNOUT_FADR_MAX:
-                    raise vol.Invalid(
-                        f"FAdr must be between {TURNOUT_FADR_MIN} and {TURNOUT_FADR_MAX}",
-                        path=[CONF_TURNOUT_FADR],
-                    )
-                # Build full list with edited item, validate uniqueness across all
-                test_list = list(self._turnouts)
-                test_list[self._edit_index] = user_input
-                _validate_turnout_fadr_uniqueness(test_list)
-                self._turnouts[self._edit_index] = user_input
-                return self.async_create_entry(data=self._save_options())
-            except vol.Invalid as err:
-                errors["base"] = str(err)
-
-        schema = vol.Schema({
-            vol.Required(CONF_TURNOUT_NAME, default=current[CONF_TURNOUT_NAME]): str,
-            vol.Required(CONF_TURNOUT_FADR, default=current[CONF_TURNOUT_FADR]): vol.Coerce(int),
-        })
+            error = self._validate_unique(
+                user_input[CONF_TURNOUT_FADR], exclude_id=self._selected_id
+            )
+            if error is None:
+                turnout[CONF_TURNOUT_NAME] = user_input[CONF_TURNOUT_NAME]
+                turnout[CONF_TURNOUT_FADR] = int(user_input[CONF_TURNOUT_FADR])
+                return await self.async_step_init()
+            errors["base"] = error
 
         return self.async_show_form(
-            step_id="edit_turnout",
-            data_schema=schema,
+            step_id="edit",
+            data_schema=self.add_suggested_values_to_schema(
+                _TURNOUT_FORM_SCHEMA,
+                {
+                    CONF_TURNOUT_NAME: turnout[CONF_TURNOUT_NAME],
+                    CONF_TURNOUT_FADR: turnout[CONF_TURNOUT_FADR],
+                },
+            ),
             errors=errors,
         )
 
-    def _save_options(self) -> dict[str, Any]:
-        """Build the options dict from the current turnout list."""
-        data: dict[str, Any] = dict(self.entry.options)
-        data[CONF_TURNOUTS] = self._turnouts
-        return data
+    async def async_step_delete_select(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Pick a turnout to delete, remove it, then return to the menu."""
+        if not self._working:
+            return await self.async_step_init()
+        if user_input is not None:
+            selected = user_input[CONF_TURNOUT_ID]
+            self._turnouts = [
+                t for t in self._working if t[CONF_TURNOUT_ID] != selected
+            ]
+            return await self.async_step_init()
+        return self.async_show_form(
+            step_id="delete_select",
+            data_schema=self._select_schema(),
+        )
+
+    async def async_step_done(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Persist the working list and finish.
+
+        If the meaningful turnout content (name + FAdr, in order) is unchanged,
+        re-emit the stored options verbatim so Home Assistant sees no diff and
+        :class:`OptionsFlowWithReload` skips the reload — a look-only session (or
+        one that only backfilled internal ids) must not tear down the live Z21
+        connection.
+        """
+        stored = self.config_entry.options
+        if self._content(self._working) == self._content(
+            stored.get(CONF_TURNOUTS, [])
+        ):
+            return self.async_create_entry(data=dict(stored))
+
+        self._migrate_edited_entities()
+        options = dict(stored)
+        options[CONF_TURNOUTS] = self._working
+        return self.async_create_entry(data=options)
+
+    @staticmethod
+    def _content(turnouts: list[dict]) -> list[tuple[str, int]]:
+        """The user-meaningful shape of a turnout list, ignoring internal ids."""
+        return [(t[CONF_TURNOUT_NAME], int(t[CONF_TURNOUT_FADR])) for t in turnouts]
+
+    # --- Helpers -----------------------------------------------------------
+
+    def _find(self, turnout_id: str | None) -> dict | None:
+        """Return the working-list turnout with ``turnout_id``, or None."""
+        return next(
+            (t for t in self._working if t[CONF_TURNOUT_ID] == turnout_id), None
+        )
+
+    def _validate_unique(
+        self, fadr: int | float, *, exclude_id: str | None = None
+    ) -> str | None:
+        """Return an error key if ``fadr`` collides with another turnout."""
+        fadr = int(fadr)
+        for t in self._working:
+            if t[CONF_TURNOUT_ID] == exclude_id:
+                continue
+            if t[CONF_TURNOUT_FADR] == fadr:
+                return "duplicate_address"
+        return None
+
+    def _select_schema(self) -> vol.Schema:
+        """A one-field schema: a dropdown of turnouts labelled by name."""
+        options = [
+            {
+                "value": t[CONF_TURNOUT_ID],
+                "label": f"{t[CONF_TURNOUT_NAME]} (FAdr {t[CONF_TURNOUT_FADR]})",
+            }
+            for t in self._working
+        ]
+        return vol.Schema({
+            vol.Required(CONF_TURNOUT_ID): SelectSelector(
+                SelectSelectorConfig(
+                    options=options, mode=SelectSelectorMode.DROPDOWN
+                )
+            )
+        })
+
+    def _migrate_edited_entities(self) -> None:
+        """Carry each turnout's switch entity across an FAdr change.
+
+        The switch unique_id is ``{serial}_turnout_{fadr}``; when a turnout keeps
+        its stable id but changes FAdr, rename the existing registry entry so its
+        history/area/customisations survive instead of orphaning as unavailable.
+
+        Renames run in **two phases** so an address swap/shuffle can't collide:
+        each entity being moved is first parked on a temporary unique_id, then
+        settled on its target. A one-phase rename in list order would raise
+        ``ValueError`` if a target unique_id is still held by another entity that
+        is itself scheduled to move later in the batch.
+        """
+        original = {
+            t[CONF_TURNOUT_ID]: t
+            for t in self.config_entry.options.get(CONF_TURNOUTS, [])
+            if CONF_TURNOUT_ID in t
+        }
+        serial = self.config_entry.data[CONF_SERIAL]
+        registry = er.async_get(self.hass)
+
+        def unique_id(fadr: int) -> str:
+            return f"{serial}_turnout_{fadr}"
+
+        # Collect the (entity_id -> target unique_id) moves for changed FAdrs.
+        moves: list[tuple[str, str]] = []
+        for t in self._working:
+            old = original.get(t[CONF_TURNOUT_ID])
+            if old is None or old[CONF_TURNOUT_FADR] == t[CONF_TURNOUT_FADR]:
+                continue
+            entity_id = registry.async_get_entity_id(
+                "switch", DOMAIN, unique_id(old[CONF_TURNOUT_FADR])
+            )
+            if entity_id is not None:
+                moves.append((entity_id, unique_id(t[CONF_TURNOUT_FADR])))
+
+        # Phase 1: park each mover on a collision-proof temporary unique_id.
+        for entity_id, _target in moves:
+            registry.async_update_entity(
+                entity_id, new_unique_id=f"migrating_{entity_id}"
+            )
+        # Phase 2: settle each on its target, now guaranteed free.
+        for entity_id, target in moves:
+            registry.async_update_entity(entity_id, new_unique_id=target)

@@ -37,6 +37,10 @@ MANUFACTURER = "Roco/Fleischmann"
 CONF_TURNOUTS = "turnouts"
 CONF_TURNOUT_NAME = "name"
 CONF_TURNOUT_FADR = "fadr"
+# Stable per-turnout identity, independent of its FAdr. Lets the options flow
+# reference a turnout across an address edit (and migrate its entity) without
+# relying on list position or FAdr.
+CONF_TURNOUT_ID = "id"
 
 # Z21 LAN protocol: FAdr is 16-bit, max usable is 65534
 TURNOUT_FADR_MIN = 0
