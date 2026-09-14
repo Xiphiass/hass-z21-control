@@ -17,6 +17,54 @@
       "already_configured": "Diese Z21 ist bereits konfiguriert."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Weichen verwalten",
+        "menu_options": {
+          "add": "Weiche hinzufügen",
+          "edit_select": "Weiche bearbeiten",
+          "delete_select": "Weiche löschen",
+          "done": "Speichern und neu laden"
+        }
+      },
+      "add": {
+        "title": "Weiche hinzufügen",
+        "data": {
+          "name": "Name",
+          "fadr": "Funktionsadresse (FAdr)"
+        },
+        "data_description": {
+          "fadr": "Die Z21-Weichen-Funktionsadresse, 0–65534. FAdr 0 ist Weiche #1 auf einer Roco multiMaus."
+        }
+      },
+      "edit_select": {
+        "title": "Weiche bearbeiten",
+        "data": {
+          "id": "Weiche"
+        }
+      },
+      "edit": {
+        "title": "Weiche bearbeiten",
+        "data": {
+          "name": "Name",
+          "fadr": "Funktionsadresse (FAdr)"
+        },
+        "data_description": {
+          "fadr": "Die Z21-Weichen-Funktionsadresse, 0–65534. FAdr 0 ist Weiche #1 auf einer Roco multiMaus."
+        }
+      },
+      "delete_select": {
+        "title": "Weiche löschen",
+        "data": {
+          "id": "Weiche"
+        }
+      }
+    },
+    "error": {
+      "duplicate_address": "Diese Funktionsadresse ist bereits einer anderen Weiche zugewiesen."
+    }
+  },
   "entity": {
     "binary_sensor": {
       "track_voltage_off": {

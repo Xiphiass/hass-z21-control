@@ -17,6 +17,54 @@
       "already_configured": "This Z21 is already configured."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Manage turnouts",
+        "menu_options": {
+          "add": "Add a turnout",
+          "edit_select": "Edit a turnout",
+          "delete_select": "Delete a turnout",
+          "done": "Save and reload"
+        }
+      },
+      "add": {
+        "title": "Add turnout",
+        "data": {
+          "name": "Name",
+          "fadr": "Function address (FAdr)"
+        },
+        "data_description": {
+          "fadr": "The Z21 turnout function address, 0–65534. FAdr 0 is turnout #1 on a Roco multiMaus."
+        }
+      },
+      "edit_select": {
+        "title": "Edit a turnout",
+        "data": {
+          "id": "Turnout"
+        }
+      },
+      "edit": {
+        "title": "Edit turnout",
+        "data": {
+          "name": "Name",
+          "fadr": "Function address (FAdr)"
+        },
+        "data_description": {
+          "fadr": "The Z21 turnout function address, 0–65534. FAdr 0 is turnout #1 on a Roco multiMaus."
+        }
+      },
+      "delete_select": {
+        "title": "Delete a turnout",
+        "data": {
+          "id": "Turnout"
+        }
+      }
+    },
+    "error": {
+      "duplicate_address": "That function address is already assigned to another turnout."
+    }
+  },
   "entity": {
     "binary_sensor": {
       "track_voltage_off": {
