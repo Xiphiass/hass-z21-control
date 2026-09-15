@@ -22,6 +22,7 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_HOST
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -39,6 +40,7 @@ from .const import (
     CONF_SERIAL,
     CONF_TURNOUT_FADR,
     CONF_TURNOUT_ID,
+    CONF_TURNOUT_INVERTED,
     CONF_TURNOUT_NAME,
     CONF_TURNOUTS,
     DOMAIN,
@@ -71,6 +73,7 @@ _TURNOUT_FORM_SCHEMA = vol.Schema(
                 mode=NumberSelectorMode.BOX,
             )
         ),
+        vol.Optional(CONF_TURNOUT_INVERTED, default=False): BooleanSelector(),
     }
 )
 
@@ -189,6 +192,9 @@ class Z21OptionsFlow(OptionsFlowWithReload):
                     CONF_TURNOUT_ID: random_uuid_hex(),
                     CONF_TURNOUT_NAME: user_input[CONF_TURNOUT_NAME],
                     CONF_TURNOUT_FADR: int(user_input[CONF_TURNOUT_FADR]),
+                    CONF_TURNOUT_INVERTED: user_input.get(
+                        CONF_TURNOUT_INVERTED, False
+                    ),
                 })
                 return await self.async_step_init()
             errors["base"] = error
@@ -229,6 +235,9 @@ class Z21OptionsFlow(OptionsFlowWithReload):
             if error is None:
                 turnout[CONF_TURNOUT_NAME] = user_input[CONF_TURNOUT_NAME]
                 turnout[CONF_TURNOUT_FADR] = int(user_input[CONF_TURNOUT_FADR])
+                turnout[CONF_TURNOUT_INVERTED] = user_input.get(
+                    CONF_TURNOUT_INVERTED, False
+                )
                 return await self.async_step_init()
             errors["base"] = error
 
@@ -239,6 +248,9 @@ class Z21OptionsFlow(OptionsFlowWithReload):
                 {
                     CONF_TURNOUT_NAME: turnout[CONF_TURNOUT_NAME],
                     CONF_TURNOUT_FADR: turnout[CONF_TURNOUT_FADR],
+                    CONF_TURNOUT_INVERTED: turnout.get(
+                        CONF_TURNOUT_INVERTED, False
+                    ),
                 },
             ),
             errors=errors,
@@ -284,9 +296,16 @@ class Z21OptionsFlow(OptionsFlowWithReload):
         return self.async_create_entry(data=options)
 
     @staticmethod
-    def _content(turnouts: list[dict]) -> list[tuple[str, int]]:
+    def _content(turnouts: list[dict]) -> list[tuple[str, int, bool]]:
         """The user-meaningful shape of a turnout list, ignoring internal ids."""
-        return [(t[CONF_TURNOUT_NAME], int(t[CONF_TURNOUT_FADR])) for t in turnouts]
+        return [
+            (
+                t[CONF_TURNOUT_NAME],
+                int(t[CONF_TURNOUT_FADR]),
+                bool(t.get(CONF_TURNOUT_INVERTED, False)),
+            )
+            for t in turnouts
+        ]
 
     # --- Helpers -----------------------------------------------------------
 

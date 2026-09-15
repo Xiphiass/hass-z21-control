@@ -41,6 +41,10 @@ CONF_TURNOUT_FADR = "fadr"
 # reference a turnout across an address edit (and migrate its entity) without
 # relying on list position or FAdr.
 CONF_TURNOUT_ID = "id"
+# Swap the on/off ↔ output mapping for a turnout whose decoder is wired
+# backwards (or an accessory/lights decoder on a turnout address). Applied only
+# in the switch entity; the coordinator/client keep the raw hardware position.
+CONF_TURNOUT_INVERTED = "inverted"
 
 # Z21 LAN protocol: FAdr is 16-bit, max usable is 65534
 TURNOUT_FADR_MIN = 0

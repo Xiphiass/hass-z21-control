@@ -32,10 +32,12 @@
         "title": "Weiche hinzufügen",
         "data": {
           "name": "Name",
-          "fadr": "Funktionsadresse (FAdr)"
+          "fadr": "Funktionsadresse (FAdr)",
+          "inverted": "Invertiert"
         },
         "data_description": {
-          "fadr": "Die Z21-Weichen-Funktionsadresse, 0–65534. FAdr 0 ist Weiche #1 auf einer Roco multiMaus."
+          "fadr": "Die Z21-Weichen-Funktionsadresse, 0–65534. FAdr 0 ist Weiche #1 auf einer Roco multiMaus.",
+          "inverted": "Vertauscht die Ein-/Aus-Richtung, falls der Decoder verkehrt herum verdrahtet ist (Aus = gerade, Ein = abzweigend)."
         }
       },
       "edit_select": {
@@ -48,10 +50,12 @@
         "title": "Weiche bearbeiten",
         "data": {
           "name": "Name",
-          "fadr": "Funktionsadresse (FAdr)"
+          "fadr": "Funktionsadresse (FAdr)",
+          "inverted": "Invertiert"
         },
         "data_description": {
-          "fadr": "Die Z21-Weichen-Funktionsadresse, 0–65534. FAdr 0 ist Weiche #1 auf einer Roco multiMaus."
+          "fadr": "Die Z21-Weichen-Funktionsadresse, 0–65534. FAdr 0 ist Weiche #1 auf einer Roco multiMaus.",
+          "inverted": "Vertauscht die Ein-/Aus-Richtung, falls der Decoder verkehrt herum verdrahtet ist (Aus = gerade, Ein = abzweigend)."
         }
       },
       "delete_select": {

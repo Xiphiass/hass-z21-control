@@ -24,6 +24,7 @@ from custom_components.z21.const import (
     CONF_SERIAL,
     CONF_TURNOUTS,
     CONF_TURNOUT_FADR,
+    CONF_TURNOUT_INVERTED,
     CONF_TURNOUT_NAME,
     DOMAIN,
 )
@@ -422,3 +423,91 @@ async def test_turnout_initial_position_poll_on_setup(hass: HomeAssistant, monke
         and f[4] == 0x43  # X-header is 0x43 (turnout info get)
     ]
     assert len(turnout_info_frames) == 2  # one per configured turnout
+
+
+_INVERTED_TURNOUTS = [
+    {
+        CONF_TURNOUT_NAME: "Inverted",
+        CONF_TURNOUT_FADR: 4,
+        CONF_TURNOUT_INVERTED: True,
+    },
+]
+
+
+async def test_inverted_is_on_reflects_flipped_position(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """For an inverted turnout, position 0 reports on and position 1 reports off."""
+    transports = _install_client(monkeypatch, responder=_responder())
+    entry = _mock_entry(_INVERTED_TURNOUTS)
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    er_registry = er.async_get(hass)
+    entity_id = er_registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_turnout_4")
+    assert entity_id is not None
+
+    client = transports[0]._client
+    # Position 0 (output 1) -> "on" when inverted.
+    client._on_datagram(_turnout_info_response(4, 0))
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == "on"
+
+    # Position 1 (output 2) -> "off" when inverted.
+    client._on_datagram(_turnout_info_response(4, 1))
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == "off"
+
+
+async def test_inverted_turnon_sends_output_1(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """An inverted turn_on drives output 1 (Q=1) instead of output 2."""
+    transports = _install_client(monkeypatch, responder=_responder())
+    entry = _mock_entry(_INVERTED_TURNOUTS)
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    transport = transports[0]
+    transport.sent.clear()
+
+    er_registry = er.async_get(hass)
+    entity_id = er_registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_turnout_4")
+    assert entity_id is not None
+
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": entity_id}, blocking=True
+    )
+
+    expected = protocol.build_turnout_set(4, 0, activate=True)
+    assert expected in transport.sent
+
+
+async def test_inverted_turnoff_sends_output_2(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """An inverted turn_off drives output 2 (Q=1) instead of output 1."""
+    transports = _install_client(monkeypatch, responder=_responder())
+    entry = _mock_entry(_INVERTED_TURNOUTS)
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    transport = transports[0]
+    transport.sent.clear()
+
+    er_registry = er.async_get(hass)
+    entity_id = er_registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_turnout_4")
+    assert entity_id is not None
+
+    await hass.services.async_call(
+        "switch", "turn_off", {"entity_id": entity_id}, blocking=True
+    )
+
+    expected = protocol.build_turnout_set(4, 1, activate=True)
+    assert expected in transport.sent

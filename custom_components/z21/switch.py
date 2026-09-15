@@ -32,6 +32,7 @@ from .const import (
     CONF_SERIAL,
     CONF_TURNOUTS,
     CONF_TURNOUT_FADR,
+    CONF_TURNOUT_INVERTED,
     CONF_TURNOUT_NAME,
     DOMAIN,
 )
@@ -79,6 +80,7 @@ async def async_setup_entry(
                 entry=entry,
                 fadr=turnout[CONF_TURNOUT_FADR],
                 name=turnout[CONF_TURNOUT_NAME],
+                inverted=turnout.get(CONF_TURNOUT_INVERTED, False),
             )
         )
     async_add_entities(entities)
@@ -123,10 +125,14 @@ class Z21TurnoutSwitch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
 
     The Z21 protocol deliberately speaks only of "output 1" and "output 2", not
     "straight"/"branching" — the physical position depends on cabling the
-    command station can't know (spec 5). Here ``on`` maps to output 2 and ``off``
-    to output 1. ``is_on`` reflects the last known position (broadcast or poll);
-    it is None (unknown) until the first position is reported. Each throw sends
-    an Activate followed by a paired Deactivate — the client owns that timing.
+    command station can't know (spec 5). By default ``on`` maps to output 2 and
+    ``off`` to output 1. When ``inverted`` is set — for a decoder wired backwards
+    or an accessory/lights decoder on a turnout address — that mapping is swapped
+    so ``on`` drives output 1 and ``off`` output 2, both for commands and for
+    interpreting reported positions. ``is_on`` reflects the last known position
+    (broadcast or poll); it is None (unknown) until the first position is
+    reported. Each throw sends an Activate followed by a paired Deactivate — the
+    client owns that timing.
     """
 
     _attr_has_entity_name = True
@@ -137,13 +143,20 @@ class Z21TurnoutSwitch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
         entry: ConfigEntry,
         fadr: int,
         name: str,
+        inverted: bool = False,
     ) -> None:
         super().__init__(coordinator)
         self._fadr = fadr
+        self._inverted = inverted
         serial = entry.data[CONF_SERIAL]
         self._attr_unique_id = f"{serial}_turnout_{fadr}"
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, str(serial))})
         self._attr_name = name
+
+    @property
+    def _on_output(self) -> int:
+        """The Z21 output that ``on`` maps to (0=output 1, 1=output 2)."""
+        return 0 if self._inverted else 1
 
     @property
     def is_on(self) -> bool | None:
@@ -151,12 +164,12 @@ class Z21TurnoutSwitch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
         pos = self.coordinator.turnout_positions.get(self._fadr)
         if pos is None:
             return None
-        return pos == 1
+        return pos == self._on_output
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Switch the turnout to output 2."""
-        self.coordinator.client.set_turnout(self._fadr, 1)
+        """Switch the turnout to its ``on`` output (2, or 1 if inverted)."""
+        self.coordinator.client.set_turnout(self._fadr, self._on_output)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Switch the turnout to output 1."""
-        self.coordinator.client.set_turnout(self._fadr, 0)
+        """Switch the turnout to its ``off`` output (1, or 2 if inverted)."""
+        self.coordinator.client.set_turnout(self._fadr, 1 - self._on_output)
