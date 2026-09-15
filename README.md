@@ -10,10 +10,11 @@ Z21, speaking the binary **Z21 LAN protocol** over UDP port 21105.
 **v1 monitors and controls the central station** (see [`CONTEXT.md`](CONTEXT.md)):
 it subscribes to the command station's **System State** and exposes it as HA
 sensors and binary sensors, and ships the station-wide central-controller
-controls — a track-power switch and an emergency-stop button. Finer-grained
-control (loco drive, turnouts, CV programming) does not ship in v1, though the
-design leaves room for it later (see
-[ADR-0001](docs/adr/0001-symmetric-io-seam.md); control feedback is covered by
+controls — a track-power switch and an emergency-stop button. It also exposes
+user-configured **turnouts** (Weichen) as switch entities. Finer-grained control
+(loco drive, CV programming) does not ship in v1, though the design leaves room
+for it later (see [ADR-0001](docs/adr/0001-symmetric-io-seam.md); control
+feedback is covered by
 [ADR-0002](docs/adr/0002-control-feedback-via-system-state.md)).
 
 ### What exists today
@@ -57,6 +58,39 @@ State** broadcast (`local_push`) and exposes it as:
 | --- | --- | --- |
 | Track power | `switch` | Turns track power on/off (on also clears an active emergency stop and programming mode). Reflects the live track-voltage state. |
 | Emergency stop | `button` | Halts all locomotives while leaving track voltage on. |
+| Turnout (per configured turnout) | `switch` | Throws a turnout between its two outputs. `on` drives output 2 and `off` output 1 by default (invertible per turnout). Reflects the last reported position. |
+
+### Turnouts
+
+Turnouts (Weichen) are **not** auto-discovered — the Z21 has no turnout
+inventory to query. You add each one yourself, by its **function address**
+(FAdr), and the integration creates a `switch` entity for it.
+
+**Configure them** under **Settings → Devices & services → Z21 → Configure**,
+which opens a menu to add, edit, and delete turnouts. Each turnout has:
+
+| Field | Meaning |
+| --- | --- |
+| **Name** | Friendly name for the switch entity (e.g. "Yard entry"). |
+| **Function address (FAdr)** | The Z21 turnout address, `0`–`65534`. FAdr `0` is turnout #1 on a Roco multiMaus (the addressing is zero-based). |
+| **Inverted** | Swaps the on/off ↔ output mapping. Off by default. |
+
+The Z21 protocol only speaks of "output 1" and "output 2" — which physical
+direction each drives depends on how the turnout decoder is wired, something the
+command station can't know. By default `off` = output 1 and `on` = output 2. If
+your decoder is wired backwards (so "off" throws the turnout the wrong way), or
+you're driving an **accessory/lights decoder** on a turnout address and want the
+logical states swapped, enable **Inverted** — no rewiring needed.
+
+Turnout switches are **non-optimistic**: after a throw the entity waits for the
+Z21 to report the new position (`LAN_X_TURNOUT_INFO`), so the state also reflects
+throws made from other input devices (e.g. a multiMaus). A turnout shows as
+*unknown* until its first position is reported.
+
+> **Example.** Add a turnout named `Yard entry` at FAdr `12`. It appears as
+> `switch.z21_<host>_yard_entry`. Turning it **on** throws it to output 2 and
+> **off** back to output 1. If the physical directions come out reversed, edit
+> the turnout and toggle **Inverted**.
 
 ## Installation (HACS custom repository)
 

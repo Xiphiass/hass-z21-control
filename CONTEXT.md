@@ -98,8 +98,8 @@ default HACS store. Default-store inclusion is explicitly out of scope for now.
 ## Central controller controls
 
 Station-wide power/stop commands — the first **control** surface, distinct from
-per-loco/turnout/CV control (still out of scope). Three Z21 LAN commands, all on
-the shared `0x40` X-bus header:
+per-loco/CV control (still out of scope). Turnout control ships separately (see
+"Turnouts" below). Three Z21 LAN commands, all on the shared `0x40` X-bus header:
 
 - **Track power** — `LAN_X_SET_TRACK_POWER_ON` (2.6) / `LAN_X_SET_TRACK_POWER_OFF`
   (2.5). Modeled as one HA **`switch`** (on = power on, off = power off).
@@ -108,14 +108,34 @@ the shared `0x40` X-bus header:
   track voltage on** (distinct from track-power-off). Modeled as an HA
   **`button`** (momentary, stateless).
 
+## Turnouts (Weichen)
+
+User-configured accessory outputs addressed by **function address (FAdr)**, a
+16-bit value `0`–`65534` (FAdr `0` = turnout #1 on a Roco multiMaus). The Z21 has
+no turnout inventory to discover, so turnouts are added by hand through the
+**options flow** (add/edit/delete), each becoming one HA **`switch`**.
+
+- **Throw** — `LAN_X_SET_TURNOUT` (5.2): an Activate followed by a paired
+  Deactivate (the client owns that timing). The protocol names only **output 1**
+  and **output 2**, never "straight"/"branching" — the physical direction depends
+  on decoder cabling the station can't know.
+- **Position feedback** — `LAN_X_TURNOUT_INFO` (5.3), polled on setup and pushed
+  on change. Switches are **non-optimistic** (per ADR-0002): state follows the
+  reported position, so external throws (e.g. a multiMaus) are reflected.
+- **on/off ↔ output** — by default `off` = output 1, `on` = output 2. A
+  per-turnout **inverted** flag swaps this, for a decoder wired backwards or an
+  accessory/lights decoder on a turnout address.
+
 ## Scope (v1)
 
 v1 **monitors and controls the central station**: it subscribes to System State
-and exposes it as HA sensors + binary sensors, and ships the station-wide
+and exposes it as HA sensors + binary sensors, ships the station-wide
 central-controller controls (a track-power switch and an emergency-stop button;
-see "Central controller controls" above). Finer-grained control — loco drive,
-turnouts, CV programming — stays out of scope, though the design leaves room for
-it later (see ADR-0001, the symmetric I/O seam).
+see "Central controller controls" above), and exposes user-configured turnouts
+as switch entities (see "Turnouts" above). Finer-grained control — loco drive,
+CV programming — stays out of scope, though the design leaves room for it later
+(see ADR-0001, the symmetric I/O seam).
 
 Fixed behaviours (not user-configurable in v1): keepalive interval **30s**,
-staleness window **2.5× keepalive (~75s)**, UDP port **21105**. No options flow.
+staleness window **2.5× keepalive (~75s)**, UDP port **21105**. Turnouts are
+managed through an options flow; the connection itself is not reconfigurable.

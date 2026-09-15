@@ -6,8 +6,9 @@ Guidance for AI agents working in this repo. Human-facing overview lives in
 A Home Assistant custom integration for Roco/Fleischmann **Z21**-compatible
 command stations, speaking the Z21 LAN protocol over UDP port 21105. It monitors
 System State (→ sensors/binary sensors) and ships the station-wide
-central-controller controls — a track-power switch and an emergency-stop button.
-Per-loco, turnout, and CV control remain out of scope.
+central-controller controls — a track-power switch and an emergency-stop button —
+plus user-configured turnouts (Weichen) as switch entities. Per-loco and CV
+control remain out of scope.
 
 ## Workflow
 
