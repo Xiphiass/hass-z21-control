@@ -147,8 +147,8 @@ async def test_user_flow_success(hass: HomeAssistant, monkeypatch) -> None:
         CONF_FW_VERSION: _FW_VERSION,
     }
 
-    device = dr.async_get(hass).async_get_device(
-        identifiers={(DOMAIN, str(_SERIAL))}
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, str(_SERIAL)), entry.entry_id
     )
     assert device is not None
     assert device.model == hw_type_name(_HW_TYPE)
