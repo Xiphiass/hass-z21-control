@@ -365,8 +365,8 @@ async def test_turnout_removed_on_options_update(hass: HomeAssistant, monkeypatc
     assert removed_state.state == "unavailable"
 
 
-async def test_turnout_initial_position_poll_on_creation(hass: HomeAssistant, monkeypatch) -> None:
-    """When a turnout entity is created, it requests the initial position."""
+async def test_turnout_initial_position_poll_on_setup(hass: HomeAssistant, monkeypatch) -> None:
+    """When the Z21 becomes available, each configured turnout is polled once."""
     sent_frames: list[bytes] = []
 
     class _RecordingTransport:
