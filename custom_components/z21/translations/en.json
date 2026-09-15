@@ -32,10 +32,12 @@
         "title": "Add turnout",
         "data": {
           "name": "Name",
-          "fadr": "Function address (FAdr)"
+          "fadr": "Function address (FAdr)",
+          "inverted": "Inverted"
         },
         "data_description": {
-          "fadr": "The Z21 turnout function address, 0–65534. FAdr 0 is turnout #1 on a Roco multiMaus."
+          "fadr": "The Z21 turnout function address, 0–65534. FAdr 0 is turnout #1 on a Roco multiMaus.",
+          "inverted": "Swap the on/off direction if the decoder is wired backwards (off = straight, on = diverging)."
         }
       },
       "edit_select": {
@@ -48,10 +50,12 @@
         "title": "Edit turnout",
         "data": {
           "name": "Name",
-          "fadr": "Function address (FAdr)"
+          "fadr": "Function address (FAdr)",
+          "inverted": "Inverted"
         },
         "data_description": {
-          "fadr": "The Z21 turnout function address, 0–65534. FAdr 0 is turnout #1 on a Roco multiMaus."
+          "fadr": "The Z21 turnout function address, 0–65534. FAdr 0 is turnout #1 on a Roco multiMaus.",
+          "inverted": "Swap the on/off direction if the decoder is wired backwards (off = straight, on = diverging)."
         }
       },
       "delete_select": {

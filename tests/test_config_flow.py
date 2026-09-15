@@ -29,6 +29,7 @@ from custom_components.z21.const import (
     CONF_SERIAL,
     CONF_TURNOUT_FADR,
     CONF_TURNOUT_ID,
+    CONF_TURNOUT_INVERTED,
     CONF_TURNOUT_NAME,
     CONF_TURNOUTS,
     DOMAIN,
@@ -338,6 +339,62 @@ async def test_options_flow_edit_turnout(hass: HomeAssistant) -> None:
     assert len(turnouts) == 1
     assert turnouts[0][CONF_TURNOUT_NAME] == "New"
     assert turnouts[0][CONF_TURNOUT_FADR] == 200
+
+
+async def test_options_flow_add_inverted_roundtrips(hass: HomeAssistant) -> None:
+    """Adding a turnout with inverted=True persists the flag."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+
+    result = await _open_menu(hass, entry)
+    result = await _pick(hass, result["flow_id"], "add")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_TURNOUT_NAME: "Inverted",
+            CONF_TURNOUT_FADR: 100,
+            CONF_TURNOUT_INVERTED: True,
+        },
+    )
+    assert result["type"] is FlowResultType.MENU
+
+    result = await _finish(hass, result["flow_id"])
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    turnouts = result["data"][CONF_TURNOUTS]
+    assert turnouts[0][CONF_TURNOUT_INVERTED] is True
+
+
+async def test_options_flow_edit_toggles_inverted(hass: HomeAssistant) -> None:
+    """Editing a turnout can toggle its inverted flag; the change triggers a save.
+
+    A session that only flips inverted must not be treated as a no-op (``_content``
+    includes the flag), so the reload is scheduled rather than skipped.
+    """
+    entry = _entry(
+        [{CONF_TURNOUT_NAME: "T", CONF_TURNOUT_FADR: 100, CONF_TURNOUT_INVERTED: False}]
+    )
+    entry.add_to_hass(hass)
+
+    result = await _open_menu(hass, entry)
+    result = await _pick(hass, result["flow_id"], "edit_select")
+    options = result["data_schema"].schema[CONF_TURNOUT_ID].config["options"]
+    turnout_id = options[0]["value"]
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_TURNOUT_ID: turnout_id}
+    )
+    assert result["step_id"] == "edit"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_TURNOUT_NAME: "T", CONF_TURNOUT_FADR: 100, CONF_TURNOUT_INVERTED: True},
+    )
+    assert result["type"] is FlowResultType.MENU
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await _pick(hass, result["flow_id"], "done")
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_TURNOUTS][0][CONF_TURNOUT_INVERTED] is True
+    reload.assert_called_once_with(entry.entry_id)
 
 
 async def test_options_flow_delete_turnout(hass: HomeAssistant) -> None:
