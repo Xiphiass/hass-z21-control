@@ -70,11 +70,12 @@ def _turnout_info_response(fadr: int, position: int) -> bytes:
     """Build a LAN_X_TURNOUT_INFO datagram.
 
     DB2 is 000000ZZ (spec 5.3): ZZ=01 -> position 0 (output 1),
-    ZZ=10 -> position 1 (output 2).
+    ZZ=10 -> position 1 (output 2). The message is tunneled under HDR_X (0x40)
+    with X-Header 0x43, so use ``build_turnout_info`` rather than a fabricated
+    top-level 0x43 header.
     """
     zz = position + 1  # 0->0b01, 1->0b10
-    payload = struct.pack("<BBB", (fadr >> 8) & 0xFF, fadr & 0xFF, zz)
-    return protocol.build_frame(protocol.HDR_TURNOUT_INFO, payload)
+    return protocol.build_turnout_info(fadr, zz)
 
 
 class _FakeTransport:
@@ -193,18 +194,14 @@ async def test_turnout_is_on_reflects_position(hass: HomeAssistant, monkeypatch)
 
     # Simulate a turnout info broadcast for FAdr 4 -> position 1 (ZZ=10)
     client = transports[0]._client
-    client._on_datagram(
-        protocol.build_frame(protocol.HDR_TURNOUT_INFO, b"\x00\x04\x02")
-    )
+    client._on_datagram(_turnout_info_response(4, 1))
     await hass.async_block_till_done()
 
     state = hass.states.get(entity_id)
     assert state.state == "on"
 
     # Simulate position change to 0 (ZZ=01)
-    client._on_datagram(
-        protocol.build_frame(protocol.HDR_TURNOUT_INFO, b"\x00\x04\x01")
-    )
+    client._on_datagram(_turnout_info_response(4, 0))
     await hass.async_block_till_done()
     assert hass.states.get(entity_id).state == "off"
 
