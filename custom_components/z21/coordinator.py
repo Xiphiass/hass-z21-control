@@ -5,7 +5,9 @@ the Z21's push model into a Home Assistant ``DataUpdateCoordinator``:
 
 - On setup it round-trips the serial+hwinfo handshake, subscribes to the **System
   State** broadcast group (``LAN_SET_BROADCASTFLAGS`` flag ``0x00000100``, spec
-  2.16), and registers a receive handler.
+  2.16), registers a receive handler, and polls the initial position of every
+  configured turnout so their states are known without waiting for the first
+  throw.
 - A pushed ``LAN_SYSTEMSTATE_DATACHANGED`` (spec 2.18) is fed straight to entities
   via ``async_set_updated_data``.
 - The 30 s poll (``LAN_SYSTEMSTATE_GETDATA``, spec 2.19) doubles as a keepalive
@@ -18,8 +20,9 @@ datagram arrived within the **staleness window** (~2.5× keepalive); only silenc
 past that window surfaces as ``UpdateFailed`` (and, via
 ``async_config_entry_first_refresh``, ``ConfigEntryNotReady`` on setup), greying
 out the entities. On the first datagram after such a silence the broadcast flags
-are re-sent (they reset on the Z21's logoff/reconnect), so a power-cycled Z21
-recovers without reloading the integration.
+are re-sent (they reset on the Z21's logoff/reconnect) and every configured
+turnout is re-polled, so a power-cycled Z21 recovers its turnout states without
+reloading the integration.
 
 This is the first layer with a Home Assistant dependency below the config flow;
 the transport (``client``) and codec (``protocol``) stay HA-free.
@@ -39,7 +42,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from . import protocol
 from .client import Z21Client, Z21Timeout
-from .const import DOMAIN
+from .const import CONF_TURNOUT_FADR, CONF_TURNOUTS, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -96,6 +99,18 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
             | protocol.BROADCAST_FLAG_DRIVING_SWITCHING
         )
         self._unsub = self.client.subscribe(self._handle_message)
+        self._discover_turnouts()
+
+    def _discover_turnouts(self) -> None:
+        """Poll the position of every configured turnout (LAN_X_GET_TURNOUT_INFO).
+
+        Called when the Z21 becomes available — on setup and again on recovery
+        from a stale/silent period, since the Z21 forgets its state model on
+        logoff. Each reply arrives as a ``LAN_X_TURNOUT_INFO`` and updates
+        :attr:`turnout_positions` via :meth:`_handle_message`.
+        """
+        for turnout in self.config_entry.options.get(CONF_TURNOUTS, []):
+            self.client.request_turnout_info(turnout[CONF_TURNOUT_FADR])
 
     def _handle_message(self, header: int, decoded: object) -> None:
         """Route a decoded dataset; System State updates entities, TurnoutInfo updates positions."""
@@ -108,6 +123,7 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
                     protocol.BROADCAST_FLAG_SYSTEM_STATE
                     | protocol.BROADCAST_FLAG_DRIVING_SWITCHING
                 )
+                self._discover_turnouts()
                 self._stale = False
             waiter = self._waiter
             if waiter is not None and not waiter.done():

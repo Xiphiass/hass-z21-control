@@ -280,13 +280,11 @@ def test_request_turnout_info_returns_future():
         c._attach_transport(t)
 
         def responder(header, client):
-            # The request datagram uses header 0x40 at bytes 2-4 (the GET
-            # command), while the response uses HDR_TURNOUT_INFO (0x43).
+            # The request datagram uses header 0x40 (LAN_X) at bytes 2-4; the
+            # response is a LAN_X_TURNOUT_INFO, also framed under 0x40 with
+            # X-Header 0x43 (spec 5.3).
             if header == 0x40:
-                payload = struct.pack("<BBB", 0x00, 0x04, 0x02)
-                client._on_datagram(
-                    protocol.build_frame(protocol.HDR_TURNOUT_INFO, payload)
-                )
+                client._on_datagram(protocol.build_turnout_info(4, 0x02))
 
         c._attach_transport(RespondingTransport(c, responder))
         fut = c.request_turnout_info(4)
@@ -314,8 +312,7 @@ def test_turnout_info_broadcast_reaches_subscriber():
     received: list[tuple[int, object]] = []
     unsub = c.subscribe(lambda h, d: received.append((h, d)))
 
-    turnout_payload = struct.pack("<BBB", 0x00, 0x04, 0x02)
-    c._on_datagram(protocol.build_frame(protocol.HDR_TURNOUT_INFO, turnout_payload))
+    c._on_datagram(protocol.build_turnout_info(4, 0x02))
 
     assert len(received) == 1
     header, decoded = received[0]
@@ -325,7 +322,7 @@ def test_turnout_info_broadcast_reaches_subscriber():
     assert decoded.position == 1
 
     unsub()
-    c._on_datagram(protocol.build_frame(protocol.HDR_TURNOUT_INFO, turnout_payload))
+    c._on_datagram(protocol.build_turnout_info(4, 0x02))
     assert len(received) == 1  # no further delivery after unsubscribe
 
 

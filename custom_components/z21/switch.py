@@ -160,8 +160,3 @@ class Z21TurnoutSwitch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Switch the turnout to output 1."""
         self.coordinator.client.set_turnout(self._fadr, 0)
-
-    async def async_added_to_hass(self) -> None:
-        """Poll the initial position on entity creation."""
-        await super().async_added_to_hass()
-        self.coordinator.client.request_turnout_info(self._fadr)

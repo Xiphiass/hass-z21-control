@@ -29,9 +29,11 @@ from custom_components.z21.protocol import (
     build_systemstate_getdata,
     build_track_power_off,
     build_track_power_on,
+    build_turnout_info,
     build_turnout_info_get,
     build_turnout_set,
     build_xbus,
+    decode_xbus,
     parse_datagram,
     _decode_turnout_info,
 )
@@ -232,12 +234,51 @@ def test_decode_turnout_info_fadr_65534():
 
 def test_combined_datagram_with_turnout_info():
     first = _system_state_datagram(main=1, central=int(CentralState.SHORT_CIRCUIT))
-    turnout_payload = struct.pack("<BBB", 0x00, 0x04, 0x02)
-    turnout_dgram = build_frame(HDR_TURNOUT_INFO, turnout_payload)
+    turnout_dgram = build_turnout_info(4, 0x02)  # real wire framing (5.3)
     second = _system_state_datagram(main=2)
     dgram = first + turnout_dgram + second
     states = parse_datagram(dgram)
     assert len(states) == 3  # SystemState, TurnoutInfo, SystemState
+    assert isinstance(states[1], TurnoutInfo)
+    assert states[1].fadr == 4
+    assert states[1].position == 1
+
+
+# --- X-bus demux (decode_xbus) ----------------------------------------------
+
+
+def test_build_turnout_info_exact_bytes():
+    # Spec 5.3 example: FAdr=4, ZZ=10 (output 2) -> 09 00 40 00 43 00 04 02 45.
+    assert build_turnout_info(4, 0x02) == bytes.fromhex("090040004300040245")
+
+
+def test_decode_xbus_turnout_info():
+    # Strip DataLen+Header framing; decode_xbus sees the X-bus payload.
+    _, payload = protocol.split_datasets(build_turnout_info(4, 0x02))[0]
+    result = decode_xbus(payload)
+    assert result is not None
+    header, decoded = result
+    assert header == HDR_TURNOUT_INFO
+    assert isinstance(decoded, TurnoutInfo)
+    assert decoded.fadr == 4
+    assert decoded.position == 1
+
+
+def test_decode_xbus_unknown_x_header():
+    # X-Header 0x61 (BC track power) is not in the dispatch table -> ignored.
+    payload = build_xbus(0x61, b"\x00")[4:]  # drop DataLen+Header framing
+    assert decode_xbus(payload) is None
+
+
+def test_decode_xbus_bad_checkbyte():
+    payload = bytearray(build_turnout_info(4, 0x02)[4:])
+    payload[-1] ^= 0xFF  # corrupt the XOR checkbyte
+    assert decode_xbus(bytes(payload)) is None
+
+
+def test_decode_xbus_too_short():
+    assert decode_xbus(b"") is None
+    assert decode_xbus(b"\x43") is None
 
 
 # --- Robustness: never raise -------------------------------------------------
@@ -335,8 +376,8 @@ def test_combined_datagram_parsed_independently():
 
 
 def test_combined_datagram_with_unknown_and_valid():
-    # An unknown-header dataset sandwiched between two valid ones is skipped.
-    unknown = build_frame(0x40, b"\x01\x02\x03")
+    # An unknown top-level header sandwiched between two valid ones is skipped.
+    unknown = build_frame(0x99, b"\x01\x02\x03")
     dgram = (
         _system_state_datagram(main=1)
         + unknown

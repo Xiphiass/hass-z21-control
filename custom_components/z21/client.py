@@ -273,12 +273,20 @@ class Z21Client:
     def _on_datagram(self, data: bytes) -> None:
         """Decode an inbound UDP payload and route each dataset by header."""
         for header, payload in protocol.split_datasets(data):
-            decoder = protocol.RECEIVE_DISPATCH.get(header)
-            if decoder is None:
-                continue
-            decoded = decoder(payload)
-            if decoded is None:
-                continue
+            if header == protocol.HDR_X:
+                # LAN_X multiplexes sub-messages by X-Header; demux and route
+                # under the stable logical header (e.g. HDR_TURNOUT_INFO).
+                xbus = protocol.decode_xbus(payload)
+                if xbus is None:
+                    continue
+                header, decoded = xbus
+            else:
+                decoder = protocol.RECEIVE_DISPATCH.get(header)
+                if decoder is None:
+                    continue
+                decoded = decoder(payload)
+                if decoded is None:
+                    continue
 
             fut = self._pending.get(header)
             if fut is not None and not fut.done():

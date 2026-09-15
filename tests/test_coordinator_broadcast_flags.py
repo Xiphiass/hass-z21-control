@@ -29,6 +29,100 @@ def mock_client():
     return client
 
 
+def _make_coordinator(mock_client, turnouts=None):
+    """Build a coordinator with a config entry exposing the given turnouts."""
+    entry = MagicMock()
+    entry.options = {"turnouts": turnouts or []}
+    with patch(
+        "custom_components.z21.coordinator.Z21Client", return_value=mock_client
+    ), patch(
+        "custom_components.z21.coordinator.HomeAssistant"
+    ), patch(
+        "custom_components.z21.coordinator.ConfigEntry"
+    ):
+        coordinator = Z21Coordinator(hass=MagicMock(), entry=entry, client=mock_client)
+    # DataUpdateCoordinator.__init__ resets config_entry from a contextvar (None
+    # in unit tests), so re-attach the entry we want _discover_turnouts to read.
+    coordinator.config_entry = entry
+    return coordinator
+
+
+def test_coordinator_polls_turnouts_on_setup(mock_client):
+    """async_setup polls the initial position of every configured turnout."""
+    import asyncio
+
+    coordinator = _make_coordinator(
+        mock_client, turnouts=[{"fadr": 4}, {"fadr": 7}]
+    )
+    asyncio.get_event_loop().run_until_complete(coordinator.async_setup())
+
+    fadrs = [c.args[0] for c in mock_client.request_turnout_info.call_args_list]
+    assert fadrs == [4, 7]
+
+
+def test_coordinator_repolls_turnouts_on_stale_recovery(mock_client):
+    """On recovery from a stale period, configured turnouts are re-polled."""
+    coordinator = _make_coordinator(mock_client, turnouts=[{"fadr": 4}, {"fadr": 7}])
+    coordinator._last_rx = 0.0
+    coordinator._stale = True
+
+    from custom_components.z21.protocol import HDR_SYSTEMSTATE_DATACHANGED, SystemState
+
+    system_state = SystemState(
+        main_current=0,
+        prog_current=0,
+        filtered_main_current=0,
+        temperature=20,
+        supply_voltage=12000,
+        vcc_voltage=12000,
+        central_state=0,
+        central_state_ex=0,
+        capabilities=0,
+        emergency_stop=False,
+        track_voltage_off=False,
+        short_circuit=False,
+        programming_mode_active=False,
+        high_temperature=False,
+        power_lost=False,
+        capabilities_valid=False,
+    )
+    coordinator._handle_message(HDR_SYSTEMSTATE_DATACHANGED, system_state)
+
+    fadrs = [c.args[0] for c in mock_client.request_turnout_info.call_args_list]
+    assert fadrs == [4, 7]
+
+
+def test_coordinator_no_repoll_without_stale(mock_client):
+    """A normal (non-stale) System State does not re-poll turnouts."""
+    coordinator = _make_coordinator(mock_client, turnouts=[{"fadr": 4}])
+    coordinator._last_rx = 0.0
+    coordinator._stale = False
+
+    from custom_components.z21.protocol import HDR_SYSTEMSTATE_DATACHANGED, SystemState
+
+    system_state = SystemState(
+        main_current=0,
+        prog_current=0,
+        filtered_main_current=0,
+        temperature=20,
+        supply_voltage=12000,
+        vcc_voltage=12000,
+        central_state=0,
+        central_state_ex=0,
+        capabilities=0,
+        emergency_stop=False,
+        track_voltage_off=False,
+        short_circuit=False,
+        programming_mode_active=False,
+        high_temperature=False,
+        power_lost=False,
+        capabilities_valid=False,
+    )
+    coordinator._handle_message(HDR_SYSTEMSTATE_DATACHANGED, system_state)
+
+    mock_client.request_turnout_info.assert_not_called()
+
+
 def test_coordinator_subscribes_to_combined_broadcast_flags(mock_client):
     """The coordinator should subscribe to BOTH system state AND driving & switching flags."""
     combined_flags = (
@@ -47,6 +141,7 @@ def test_coordinator_subscribes_to_combined_broadcast_flags(mock_client):
             entry=MagicMock(),
             client=mock_client,
         )
+        coordinator.config_entry = MagicMock(options={})
 
         # Simulate the async_setup flow
         import asyncio
@@ -226,6 +321,7 @@ def test_coordinator_stale_recovery_sends_combined_flags(mock_client):
             entry=MagicMock(),
             client=mock_client,
         )
+        coordinator.config_entry = MagicMock(options={})
         coordinator._last_rx = 0.0
         coordinator._stale = True  # Simulate stale state
 

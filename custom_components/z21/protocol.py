@@ -36,7 +36,12 @@ HDR_X = 0x40  # LAN_X (X-bus tunnel; carries e.g. LAN_X_SET_TRACK_POWER_*)
 
 # Inbound (Z21 -> client)
 HDR_SYSTEMSTATE_DATACHANGED = 0x84  # LAN_SYSTEMSTATE_DATACHANGED (2.18)
-HDR_TURNOUT_INFO = 0x43  # LAN_X_TURNOUT_INFO (5.3)
+# NOTE: 0x43 is the *X-Header* of LAN_X_TURNOUT_INFO (5.3), not a top-level
+# Header — the message arrives framed under HDR_X (0x40). We keep it as the
+# stable logical routing key that ``decode_xbus`` surfaces turnout info under
+# (see ``_XBUS_DISPATCH``), so the client's pending-future dict and the
+# coordinator can key on it directly.
+HDR_TURNOUT_INFO = 0x43  # LAN_X_TURNOUT_INFO X-Header (5.3)
 
 # --- Broadcast flags (2.16) -------------------------------------------------
 
@@ -206,6 +211,25 @@ def build_turnout_set(
     return build_xbus(0x53, bytes((fadr_ms, fadr_ls, db2)))
 
 
+def build_turnout_info(fadr: int, zz: int) -> bytes:
+    """LAN_X_TURNOUT_INFO datagram as the Z21 sends it (5.3).
+
+    The inbound counterpart to :func:`build_turnout_info_get`: frames the reply
+    under ``HDR_X`` with X-Header ``0x43`` and DB2 ``000000ZZ``. Provided so
+    tests (and any round-trip) exercise the real wire format rather than a
+    fabricated top-level ``0x43`` header. ``zz`` is the raw 2-bit ZZ field
+    (0=not switched, 1=output 1, 2=output 2, 3=invalid).
+
+    Example for FAdr=4, ZZ=10 (output 2)::
+
+        09 00 40 00 43 00 04 02 45
+
+    """
+    fadr_ms = (fadr >> 8) & 0xFF
+    fadr_ls = fadr & 0xFF
+    return build_xbus(0x43, bytes((fadr_ms, fadr_ls, zz & 0x03)))
+
+
 # --- Receive path: decoded datasets -----------------------------------------
 
 
@@ -363,22 +387,62 @@ def _decode_system_state(payload: bytes) -> SystemState | None:
     )
 
 
+# X-Header -> (logical header, decoder) for messages tunneled under HDR_X
+# (0x40). LAN_X multiplexes many sub-messages by X-Header (turnout info 0x43,
+# loco info, BC track power 0x61, ...), so it needs a second-level dispatch on
+# the X-Header. Each entry declares the stable logical header the decoded
+# dataset is surfaced under, keeping downstream keying (client pending futures,
+# coordinator) independent of the 0x40 tunnel. Adding an inbound X-bus message
+# later is one new entry here plus its decoder.
+_XBUS_DISPATCH = {
+    0x43: (HDR_TURNOUT_INFO, _decode_turnout_info),
+}
+
+
+def decode_xbus(payload: bytes) -> tuple[int, object] | None:
+    """Decode a LAN_X (0x40) payload into ``(logical_header, dataset)``.
+
+    The payload is ``X-Header | DB.. | XOR-Byte``. Validates the XOR checkbyte,
+    strips the X-Header and checkbyte, then sub-dispatches on the X-Header via
+    :data:`_XBUS_DISPATCH`. Returns ``None`` for a too-short payload, a bad
+    checkbyte, an unknown X-Header, or a sub-decoder that declines — mirroring
+    the "never raise, skip the unknown" contract of the top-level dispatch.
+    """
+    if len(payload) < 2:  # need at least X-Header + XOR
+        return None
+    checksum = 0
+    for byte in payload[:-1]:
+        checksum ^= byte
+    if checksum != payload[-1]:
+        return None
+    x_header = payload[0]
+    entry = _XBUS_DISPATCH.get(x_header)
+    if entry is None:
+        return None
+    logical_header, decoder = entry
+    decoded = decoder(payload[1:-1])  # inner: X-Header and checkbyte stripped
+    if decoded is None:
+        return None
+    return logical_header, decoded
+
+
 # Header -> decoder. Adding a control-related inbound message later is a new
-# entry here plus its decoder (ADR-0001 receive dispatch table).
+# entry here plus its decoder (ADR-0001 receive dispatch table). LAN_X (0x40)
+# messages are handled separately via decode_xbus (second-level X-Header
+# dispatch), not through this top-level table.
 _DISPATCH = {
     HDR_SYSTEMSTATE_DATACHANGED: _decode_system_state,
-    HDR_TURNOUT_INFO: _decode_turnout_info,
 }
 
 # Full receive dispatch for transport clients: the header-keyed table the async
 # client decodes and routes on (ADR-0001 receive seam). A superset of _DISPATCH
 # so parse_datagram's SystemState-only contract stays unchanged. Adding a
-# control-related inbound message later is one new entry here plus its decoder.
+# control-related inbound message later is one new entry here plus its decoder;
+# LAN_X (0x40) messages are demultiplexed via decode_xbus instead.
 RECEIVE_DISPATCH = {
     HDR_SERIAL_NUMBER: _decode_serial_number,
     HDR_HWINFO: _decode_hwinfo,
     HDR_SYSTEMSTATE_DATACHANGED: _decode_system_state,
-    HDR_TURNOUT_INFO: _decode_turnout_info,
 }
 
 
@@ -420,6 +484,11 @@ def parse_datagram(data: bytes) -> list[SystemState | TurnoutInfo]:
     """
     results: list[SystemState | TurnoutInfo] = []
     for header, payload in split_datasets(data):
+        if header == HDR_X:
+            xbus = decode_xbus(payload)
+            if xbus is not None:
+                results.append(xbus[1])
+            continue
         decoder = _DISPATCH.get(header)
         if decoder is not None:
             decoded = decoder(payload)
