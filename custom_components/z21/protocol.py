@@ -20,9 +20,12 @@ Byte layouts and bitmasks follow the Z21 LAN protocol specification v1.13
 
 from __future__ import annotations
 
+import logging
 import struct
 from dataclasses import dataclass
 from enum import IntFlag
+
+_LOGGER = logging.getLogger(__name__)
 
 # --- Headers (little-endian 16-bit on the wire) -----------------------------
 
@@ -402,11 +405,20 @@ _XBUS_DISPATCH = {
 def decode_xbus(payload: bytes) -> tuple[int, object] | None:
     """Decode a LAN_X (0x40) payload into ``(logical_header, dataset)``.
 
-    The payload is ``X-Header | DB.. | XOR-Byte``. Validates the XOR checkbyte,
-    strips the X-Header and checkbyte, then sub-dispatches on the X-Header via
-    :data:`_XBUS_DISPATCH`. Returns ``None`` for a too-short payload, a bad
-    checkbyte, an unknown X-Header, or a sub-decoder that declines — mirroring
-    the "never raise, skip the unknown" contract of the top-level dispatch.
+    The payload is ``X-Header | DB.. | XOR-Byte``. Sub-dispatches on the
+    X-Header via :data:`_XBUS_DISPATCH` after stripping the X-Header and
+    checkbyte. Returns ``None`` for a too-short payload, an unknown X-Header, or
+    a sub-decoder that declines — mirroring the "never raise, skip the unknown"
+    contract of the top-level dispatch.
+
+    The trailing XOR checkbyte is treated as **advisory**, not gating: real Z21
+    firmware sends ``LAN_X_TURNOUT_INFO`` (5.3) with a checkbyte that does not
+    match the spec's "XOR of X-Header and data bytes" rule (observed on FW
+    1.42 / HW 0x201 — e.g. ``09 00 40 00 43 00 64 02 6c`` where that XOR is
+    ``0x25``, not ``0x6c``). Because the LAN length prefix and UDP datagram
+    boundaries already delimit the message, the XOR adds no framing safety here;
+    dropping on mismatch silently discarded every turnout position update. We
+    therefore log a mismatch at debug level and decode anyway.
     """
     if len(payload) < 2:  # need at least X-Header + XOR
         return None
@@ -414,7 +426,13 @@ def decode_xbus(payload: bytes) -> tuple[int, object] | None:
     for byte in payload[:-1]:
         checksum ^= byte
     if checksum != payload[-1]:
-        return None
+        _LOGGER.debug(
+            "LAN_X checkbyte mismatch (computed 0x%02x, wire 0x%02x) for %s; "
+            "decoding anyway",
+            checksum,
+            payload[-1],
+            payload.hex(" "),
+        )
     x_header = payload[0]
     entry = _XBUS_DISPATCH.get(x_header)
     if entry is None:

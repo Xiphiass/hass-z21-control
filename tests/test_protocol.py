@@ -270,10 +270,40 @@ def test_decode_xbus_unknown_x_header():
     assert decode_xbus(payload) is None
 
 
-def test_decode_xbus_bad_checkbyte():
+def test_decode_xbus_checkbyte_is_advisory():
+    """A mismatched XOR checkbyte is logged, not gated — the message still decodes.
+
+    Real Z21 firmware sends LAN_X_TURNOUT_INFO (5.3) with a checkbyte that does
+    not follow the spec's X-Header^data XOR rule (captured on FW 1.42 / HW 0x201:
+    ``09 00 40 00 43 00 64 02 6c``). Dropping on mismatch silently discarded
+    every turnout position update, so the checkbyte is treated as advisory. See
+    ``decode_xbus``.
+    """
     payload = bytearray(build_turnout_info(4, 0x02)[4:])
     payload[-1] ^= 0xFF  # corrupt the XOR checkbyte
-    assert decode_xbus(bytes(payload)) is None
+    result = decode_xbus(bytes(payload))
+    assert result is not None
+    header, decoded = result
+    assert header == HDR_TURNOUT_INFO
+    assert decoded.fadr == 4
+    assert decoded.position == 1
+
+
+def test_decode_xbus_real_turnout_info_frame():
+    """The exact bytes a real Z21 sends for a turnout position decode correctly.
+
+    Regression for the checkbyte-gating bug: this frame's spec XOR is 0x25 but
+    the wire checkbyte is 0x6c, which the old strict validation rejected.
+    """
+    # 09 00 40 00 43 00 64 02 6c -> FAdr 100, ZZ=10 (output 2 -> position 1).
+    payload = bytes.fromhex("4300640 2 6c".replace(" ", ""))
+    result = decode_xbus(payload)
+    assert result is not None
+    header, decoded = result
+    assert header == HDR_TURNOUT_INFO
+    assert decoded.fadr == 100
+    assert decoded.position == 1
+    assert decoded.invalid is False
 
 
 def test_decode_xbus_too_short():
