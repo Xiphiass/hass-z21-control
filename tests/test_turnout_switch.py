@@ -337,6 +337,82 @@ async def test_turnout_deactivate_follows_activate(
     assert transport.sent.index(activate) < transport.sent.index(deactivate)
 
 
+async def test_turnon_polls_position_after_settle(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """After a throw, the turnout is re-polled once the throw settles."""
+    import asyncio
+
+    from custom_components.z21 import coordinator as coordinator_module
+
+    # Shrink the settle delay so the test doesn't wait for the real one.
+    monkeypatch.setattr(coordinator_module, "TURNOUT_SETTLE_DELAY", 0.01)
+
+    transports = _install_client(monkeypatch, responder=_responder())
+    entry = _mock_entry()
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    transport = transports[0]
+    transport.sent.clear()
+
+    er_registry = er.async_get(hass)
+    entity_id = er_registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_turnout_4")
+    assert entity_id is not None
+
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": entity_id}, blocking=True
+    )
+
+    # The poll is scheduled as a background task; it fires after the settle delay.
+    expected_poll = protocol.build_turnout_info_get(4)
+    assert expected_poll not in transport.sent  # not yet — it's scheduled
+
+    await asyncio.sleep(0.03)
+    await hass.async_block_till_done()
+    assert expected_poll in transport.sent
+
+
+async def test_turnon_state_follows_polled_reply(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """State stays unknown until the polled TURNOUT_INFO reply arrives (non-optimistic)."""
+    import asyncio
+
+    from custom_components.z21 import coordinator as coordinator_module
+
+    monkeypatch.setattr(coordinator_module, "TURNOUT_SETTLE_DELAY", 0.01)
+
+    transports = _install_client(monkeypatch, responder=_responder())
+    entry = _mock_entry()
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    er_registry = er.async_get(hass)
+    entity_id = er_registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_turnout_4")
+    assert entity_id is not None
+
+    # Before any throw the Z21 has reported nothing -> unknown.
+    assert hass.states.get(entity_id).state == "unknown"
+
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": entity_id}, blocking=True
+    )
+    # Non-optimistic: the throw alone does not flip the state.
+    assert hass.states.get(entity_id).state == "unknown"
+
+    # Simulate the Z21 answering the poll with the new position (output 2).
+    client = transports[0]._client
+    client._on_datagram(_turnout_info_response(4, 1))
+    await asyncio.sleep(0.03)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == "on"
+
+
 async def test_turnout_removed_on_options_update(hass: HomeAssistant, monkeypatch) -> None:
     """Removing a turnout from options removes the entity."""
     transports = _install_client(monkeypatch, responder=_responder())

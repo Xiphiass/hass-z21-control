@@ -129,10 +129,13 @@ class Z21TurnoutSwitch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
     ``off`` to output 1. When ``inverted`` is set — for a decoder wired backwards
     or an accessory/lights decoder on a turnout address — that mapping is swapped
     so ``on`` drives output 1 and ``off`` output 2, both for commands and for
-    interpreting reported positions. ``is_on`` reflects the last known position
-    (broadcast or poll); it is None (unknown) until the first position is
-    reported. Each throw sends an Activate followed by a paired Deactivate — the
-    client owns that timing.
+    interpreting reported positions. ``is_on`` reflects the last known position;
+    it is None (unknown) until a position is reported. The Z21 sends no
+    unsolicited position updates, so state is refreshed by polling
+    (``LAN_X_GET_TURNOUT_INFO``) on setup and again after every throw — keeping
+    the entity non-optimistic, with the Z21 as the source of truth. Each throw
+    sends an Activate followed by a paired Deactivate — the client owns that
+    timing.
     """
 
     _attr_has_entity_name = True
@@ -167,9 +170,28 @@ class Z21TurnoutSwitch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
         return pos == self._on_output
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Switch the turnout to its ``on`` output (2, or 1 if inverted)."""
+        """Switch the turnout to its ``on`` output (2, or 1 if inverted).
+
+        Non-optimistic: after commanding the throw, poll the Z21 for the new
+        position (it sends no unsolicited update) and let the reply drive
+        ``is_on``. The poll is scheduled as a background task so the service
+        call returns immediately rather than blocking for the settle delay.
+        """
         self.coordinator.client.set_turnout(self._fadr, self._on_output)
+        self._schedule_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Switch the turnout to its ``off`` output (1, or 2 if inverted)."""
+        """Switch the turnout to its ``off`` output (1, or 2 if inverted).
+
+        Non-optimistic: same poll-back approach as ``async_turn_on``.
+        """
         self.coordinator.client.set_turnout(self._fadr, 1 - self._on_output)
+        self._schedule_refresh()
+
+    def _schedule_refresh(self) -> None:
+        """Poll this turnout's position after the throw settles (background task)."""
+        self.coordinator.config_entry.async_create_background_task(
+            self.hass,
+            self.coordinator.async_refresh_turnout(self._fadr),
+            f"z21-turnout-refresh-{self._fadr}",
+        )

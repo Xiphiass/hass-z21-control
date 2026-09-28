@@ -41,7 +41,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import protocol
-from .client import Z21Client, Z21Timeout
+from .client import TURNOUT_DEACTIVATE_DELAY, Z21Client, Z21Timeout
 from .const import CONF_TURNOUT_FADR, CONF_TURNOUTS, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,6 +53,12 @@ _LOGGER = logging.getLogger(__name__)
 KEEPALIVE_INTERVAL = 30.0
 _STATE_TIMEOUT = 5.0
 STALENESS_WINDOW = 2.5 * KEEPALIVE_INTERVAL
+
+# After a throw the client sends Activate now and Deactivate after
+# TURNOUT_DEACTIVATE_DELAY; wait past that pair before re-polling so the Z21 has
+# committed the new position and doesn't answer with the stale one. Module-level
+# so tests can shrink it.
+TURNOUT_SETTLE_DELAY = TURNOUT_DEACTIVATE_DELAY + 0.1
 
 
 class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
@@ -140,6 +146,19 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
     def turnout_positions(self) -> dict[int, int | None]:
         """Return a copy of the last known turnout positions (FAdr -> position)."""
         return dict(self._turnout_positions)
+
+    async def async_refresh_turnout(self, fadr: int) -> None:
+        """Re-poll a turnout's position after a throw settles (LAN_X_GET_TURNOUT_INFO, 5.1).
+
+        The Z21 sends no unsolicited position update, so after commanding a throw
+        we query it once the Activate/Deactivate pair has completed. The reply
+        arrives as a ``LAN_X_TURNOUT_INFO`` and updates :attr:`turnout_positions`
+        via :meth:`_handle_message`, exactly like the setup/recovery discovery
+        poll — keeping turnout state non-optimistic (the Z21 is the source of
+        truth), consistent with the track-power switch (ADR-0002).
+        """
+        await asyncio.sleep(TURNOUT_SETTLE_DELAY)
+        self.client.request_turnout_info(fadr)
 
     async def _async_update_data(self) -> protocol.SystemState:
         """Poll for System State, awaiting the pushed reply within the window."""
