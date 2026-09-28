@@ -167,9 +167,21 @@ class Z21TurnoutSwitch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
         return pos == self._on_output
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Switch the turnout to its ``on`` output (2, or 1 if inverted)."""
+        """Switch the turnout to its ``on`` output (2, or 1 if inverted).
+
+        Optimistic: update the position in the coordinator immediately so
+        ``is_on`` reflects the new state without waiting for the Z21 to
+        broadcast (it doesn't — the Z21 only answers position queries).
+        """
         self.coordinator.client.set_turnout(self._fadr, self._on_output)
+        self.coordinator._turnout_positions[self._fadr] = self._on_output
+        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Switch the turnout to its ``off`` output (1, or 2 if inverted)."""
+        """Switch the turnout to its ``off`` output (1, or 2 if inverted).
+
+        Optimistic: same approach as ``async_turn_on``.
+        """
         self.coordinator.client.set_turnout(self._fadr, 1 - self._on_output)
+        self.coordinator._turnout_positions[self._fadr] = 1 - self._on_output
+        self.async_write_ha_state()
