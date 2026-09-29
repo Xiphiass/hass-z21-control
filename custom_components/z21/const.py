@@ -50,6 +50,28 @@ CONF_TURNOUT_INVERTED = "inverted"
 TURNOUT_FADR_MIN = 0
 TURNOUT_FADR_MAX = 65534
 
+# Loco management (options flow)
+CONF_LOCOS = "locos"
+CONF_LOCO_NAME = "name"
+CONF_LOCO_ADDRESS = "address"
+CONF_LOCO_SPEED_STEPS = "speed_steps"
+# Stable per-loco identity, independent of its DCC address. Mirrors
+# CONF_TURNOUT_ID: lets the options flow reference a loco across an address edit
+# (and migrate its entities) without relying on list position or address.
+CONF_LOCO_ID = "id"
+
+# DCC loco address range (CONTEXT.md "Locos"): 1–10239 usable.
+LOCO_ADDRESS_MIN = 1
+LOCO_ADDRESS_MAX = 10239
+
+# Speed-step modes offered per loco (DCC resolution); 128 is the modern default.
+LOCO_SPEED_STEPS = (14, 28, 128)
+LOCO_SPEED_STEPS_DEFAULT = 128
+
+# The Z21 caps loco-info subscriptions at 16 addresses (FIFO); a 17th would
+# silently evict the oldest, so the options flow refuses to configure more.
+LOCO_MAX = 16
+
 # Known LAN_GET_HWINFO HwType codes (Z21 LAN protocol spec 2.20). Unknown types
 # fall back to a hex string via ``hw_type_name``.
 HW_TYPE_NAMES: dict[int, str] = {
