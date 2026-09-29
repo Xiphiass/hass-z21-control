@@ -126,15 +126,54 @@ no turnout inventory to discover, so turnouts are added by hand through the
   per-turnout **inverted** flag swaps this, for a decoder wired backwards or an
   accessory/lights decoder on a turnout address.
 
+## Locos (Loco control)
+
+User-configured locomotives addressed by **DCC loco address** (1–10239 usable).
+The Z21 has no loco roster to discover, so locos are added by hand through the
+**options flow**, alongside turnouts (add/edit/delete). Each loco is a HA
+**Device** — a container for its drive entities today and its function entities
+later. Per-loco config is `{id, name, address, speed_steps}`, with a stable `id`
+independent of the address (so an address edit migrates the entities), and
+`speed_steps` one of **14 / 28 / 128** (default 128), because the drive command
+requires it and the Z21 stores it per address. **DCC only** — the integration
+never sends `LAN_SET_LOCOMODE`.
+
+- **Drive** — `LAN_X_SET_LOCO_DRIVE` (4.2): one command packing **speed and
+  direction together** (DB3 `RVVVVVVV`). Because they are coupled, the
+  coordinator holds each loco's last-known `(direction, speed)` and composes
+  every command from it (see ADR-0003).
+- **Speed steps** — 14 / 28 / 128, the DCC resolution stored per loco. Speed is
+  exposed in **raw steps** (0–14 / 0–28 / 0–126), not percent, so the feedback
+  echo round-trips without rounding.
+- **Stop vs E-Stop** — speed **0** is a normal **Stop** (decelerate). A per-loco
+  **E-Stop** (immediate) is a separate `button`. Both are still the drive command
+  (`R0000000` / `R0000001`). Distinct from the station-wide emergency stop
+  (`LAN_X_SET_STOP`, see "Central controller controls").
+- **Loco feedback** — `LAN_X_LOCO_INFO` (4.4, X-Header `0xEF`), pushed when any
+  client/handset changes a **subscribed** loco. Subscription is per loco via
+  `LAN_X_GET_LOCO_INFO` (4.1) on the **driving & switching** broadcast group
+  (flag `0x00000001`), capped at **16 addresses (FIFO)** per client — so the
+  integration caps configured locos at 16. State is **non-optimistic**: entities
+  follow the reported info, reflecting external control (ADR-0003).
+
+### Loco entities
+
+Each configured loco is one HA **Device** carrying three entities: a speed
+**`number`** (0..step-max), a direction **`switch`** (on = forward), and an
+emergency-stop **`button`** (per-loco E-Stop). Function buttons (F0–F31) are
+deliberately deferred to a follow-up slice.
+
 ## Scope (v1)
 
 v1 **monitors and controls the central station**: it subscribes to System State
 and exposes it as HA sensors + binary sensors, ships the station-wide
 central-controller controls (a track-power switch and an emergency-stop button;
-see "Central controller controls" above), and exposes user-configured turnouts
-as switch entities (see "Turnouts" above). Finer-grained control — loco drive,
-CV programming — stays out of scope, though the design leaves room for it later
-(see ADR-0001, the symmetric I/O seam).
+see "Central controller controls" above), exposes user-configured turnouts
+as switch entities (see "Turnouts" above), and exposes user-configured locos as
+drive entities — a speed number, a direction switch, and an E-Stop button per
+loco (see "Locos" above). Finer-grained control — loco **functions** (F0–F31),
+CV programming — stays out of scope for this slice, though the design leaves room
+for it later (see ADR-0001, the symmetric I/O seam, and ADR-0003).
 
 Fixed behaviours (not user-configurable in v1): keepalive interval **30s**,
 staleness window **2.5× keepalive (~75s)**, UDP port **21105**. Turnouts are
