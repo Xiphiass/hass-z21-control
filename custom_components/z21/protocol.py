@@ -292,6 +292,21 @@ def max_speed_step(speed_steps: int) -> int:
     return 126 if speed_steps == 128 else speed_steps
 
 
+def rescale_speed_step(step: int, from_steps: int, to_steps: int) -> int:
+    """Rescale a raw ``step`` from one 14 / 28 / 128 step mode to another (4.2).
+
+    Proportional over the drivable range (:func:`max_speed_step`), rounded to
+    the nearest step and clamped to the target maximum. Stop stays Stop, and a
+    moving step never rounds down to Stop — a crawl in a finer mode is step 1
+    in a coarser one.
+    """
+    if step <= 0:
+        return 0
+    to_max = max_speed_step(to_steps)
+    scaled = round(step * to_max / max_speed_step(from_steps))
+    return max(1, min(scaled, to_max))
+
+
 def encode_speed(step: int, speed_steps: int, *, estop: bool = False) -> int:
     """Encode a raw speed ``step`` into the 7-bit ``VVVVVVV`` field of DB3 (4.2).
 

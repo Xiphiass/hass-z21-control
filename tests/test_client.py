@@ -297,6 +297,38 @@ def test_request_turnout_info_returns_future():
     assert info.position == 1
 
 
+def test_concurrent_turnout_info_requests_resolve_per_fadr():
+    c = Z21Client("192.0.2.10")
+    c._attach_transport(FakeTransport())
+
+    async def scenario():
+        fut4 = c.request_turnout_info(4)
+        fut9 = c.request_turnout_info(9)
+        c._on_datagram(protocol.build_turnout_info(9, 0x01))
+        c._on_datagram(protocol.build_turnout_info(4, 0x02))
+        return (
+            await asyncio.wait_for(fut4, timeout=0.5),
+            await asyncio.wait_for(fut9, timeout=0.5),
+        )
+
+    info4, info9 = run(scenario())
+    assert (info4.fadr, info4.position) == (4, 1)
+    assert (info9.fadr, info9.position) == (9, 0)
+
+
+def test_turnout_info_for_other_fadr_does_not_resolve_request():
+    c = Z21Client("192.0.2.10")
+    c._attach_transport(FakeTransport())
+
+    async def scenario():
+        fut = c.request_turnout_info(9)
+        c._on_datagram(protocol.build_turnout_info(4, 0x02))
+        await asyncio.sleep(0)
+        return fut
+
+    assert not run(scenario()).done()
+
+
 def test_request_turnout_info_without_transport_raises():
     c = Z21Client("192.0.2.10")
     with pytest.raises(RuntimeError):
@@ -371,6 +403,41 @@ def test_request_loco_info_sends_request_and_resolves_future():
         10,
         28,
     )
+
+
+def test_concurrent_loco_info_requests_resolve_per_address():
+    """Back-to-back polls (as _discover_locos does) each get their own reply."""
+    c = Z21Client("192.0.2.10")
+    c._attach_transport(FakeTransport())
+
+    async def scenario():
+        fut3 = c.request_loco_info(3)
+        fut5 = c.request_loco_info(5)
+        # Replies arrive in the opposite order to the requests.
+        c._on_datagram(protocol.build_loco_info(5, forward=True, step=7, speed_steps=128))
+        c._on_datagram(protocol.build_loco_info(3, forward=False, step=9, speed_steps=28))
+        return (
+            await asyncio.wait_for(fut3, timeout=0.5),
+            await asyncio.wait_for(fut5, timeout=0.5),
+        )
+
+    info3, info5 = run(scenario())
+    assert (info3.address, info3.speed) == (3, 9)
+    assert (info5.address, info5.speed) == (5, 7)
+
+
+def test_loco_info_push_for_other_address_does_not_resolve_request():
+    c = Z21Client("192.0.2.10")
+    c._attach_transport(FakeTransport())
+
+    async def scenario():
+        fut = c.request_loco_info(5)
+        # A subscription push for a different loco lands first.
+        c._on_datagram(protocol.build_loco_info(3, forward=True, step=1, speed_steps=128))
+        await asyncio.sleep(0)
+        return fut
+
+    assert not run(scenario()).done()
 
 
 def test_request_loco_info_without_transport_raises():

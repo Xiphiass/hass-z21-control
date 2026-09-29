@@ -39,6 +39,14 @@ _LOGGER = logging.getLogger(__name__)
 # object (e.g. protocol.SystemState) for every successfully decoded datagram.
 Handler = Callable[[int, object], None]
 
+# Header -> the decoded field a pending request correlates on. These replies
+# (LAN_X_LOCO_INFO 4.4, LAN_X_TURNOUT_INFO 5.3) are also pushed unsolicited for
+# other objects, so a request resolves only on a reply for its own address.
+_CORRELATION: dict[int, Callable[[object], int]] = {
+    protocol.HDR_LOCO_INFO: lambda info: info.address,
+    protocol.HDR_TURNOUT_INFO: lambda info: info.fadr,
+}
+
 
 class Z21Timeout(Exception):
     """``connect`` exhausted its retries without a serial + hwinfo response."""
@@ -84,9 +92,11 @@ class Z21Client:
         self._loop = loop
         self._transport: asyncio.BaseTransport | None = None
         self._subscribers: list[Handler] = []
-        # Header -> one-shot future awaiting the next response with that header.
-        # The Z21 has no request IDs, so responses correlate only by header.
-        self._pending: dict[int, asyncio.Future] = {}
+        # One-shot futures awaiting a response. The Z21 has no request IDs, so
+        # responses correlate by header — refined to (header, address) for the
+        # per-object info replies in _CORRELATION, which also arrive as pushes
+        # for other objects and may be requested back to back.
+        self._pending: dict[int | tuple[int, int], asyncio.Future] = {}
         # FAdr -> scheduled deactivate for an in-flight turnout throw. Keyed by
         # FAdr so a rapid re-throw of the same turnout replaces its pending
         # deactivate; different turnouts run independent timers (Q=1 allows it).
@@ -247,8 +257,7 @@ class Z21Client:
     def request_turnout_info(self, fadr: int) -> asyncio.Future:
         """Send LAN_X_GET_TURNOUT_INFO (5.1) and return a Future for the response."""
         loop = self._loop or asyncio.get_running_loop()
-        fut: asyncio.Future = loop.create_future()
-        self._pending[protocol.HDR_TURNOUT_INFO] = fut
+        fut = self._pending_future(loop, (protocol.HDR_TURNOUT_INFO, fadr))
         self._transport_send(protocol.build_turnout_info_get(fadr))
         return fut
 
@@ -284,9 +293,22 @@ class Z21Client:
         changes for ``address`` (capped at 16 addresses, FIFO — spec 4.1).
         """
         loop = self._loop or asyncio.get_running_loop()
-        fut: asyncio.Future = loop.create_future()
-        self._pending[protocol.HDR_LOCO_INFO] = fut
+        fut = self._pending_future(loop, (protocol.HDR_LOCO_INFO, address))
         self._transport_send(protocol.build_loco_info_get(address))
+        return fut
+
+    def _pending_future(
+        self, loop: asyncio.AbstractEventLoop, key: tuple[int, int]
+    ) -> asyncio.Future:
+        """Return the in-flight future for ``key``, or register a new one.
+
+        A repeat request for the same object shares the unresolved future
+        rather than orphaning it.
+        """
+        fut = self._pending.get(key)
+        if fut is None or fut.done():
+            fut = loop.create_future()
+            self._pending[key] = fut
         return fut
 
     def logoff(self) -> None:
@@ -325,7 +347,11 @@ class Z21Client:
                 if decoded is None:
                     continue
 
-            fut = self._pending.get(header)
+            correlate = _CORRELATION.get(header)
+            if correlate is None:
+                fut = self._pending.get(header)
+            else:
+                fut = self._pending.pop((header, correlate(decoded)), None)
             if fut is not None and not fut.done():
                 fut.set_result(decoded)
 
