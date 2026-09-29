@@ -14,15 +14,20 @@ from pathlib import Path
 from custom_components.z21 import protocol
 from custom_components.z21.protocol import (
     BROADCAST_FLAG_SYSTEM_STATE,
+    HDR_LOCO_INFO,
     HDR_SYSTEMSTATE_DATACHANGED,
     HDR_TURNOUT_INFO,
     CentralState,
     CentralStateEx,
+    LocoInfo,
     SystemState,
     TurnoutInfo,
     build_frame,
     build_get_hwinfo,
     build_get_serial_number,
+    build_loco_drive,
+    build_loco_info,
+    build_loco_info_get,
     build_logoff,
     build_set_broadcastflags,
     build_set_stop,
@@ -33,8 +38,11 @@ from custom_components.z21.protocol import (
     build_turnout_info_get,
     build_turnout_set,
     build_xbus,
+    decode_speed,
     decode_xbus,
+    encode_speed,
     parse_datagram,
+    _decode_loco_info,
     _decode_turnout_info,
 )
 
@@ -479,6 +487,258 @@ def test_partial_bitmask_only_central_state():
     assert state.emergency_stop is True
     assert state.central_state_ex == 0
     assert state.capabilities_valid is False
+
+
+# --- Loco speed coding (§4.2) ------------------------------------------------
+
+
+# The three DCC speed-step modes and their step counts (0 = Stop for each).
+_MODE_14 = 14
+_MODE_28 = 28
+_MODE_128 = 128
+
+
+def test_encode_speed_dcc14_stop_and_estop():
+    # Stop is the all-zero speed field; E-Stop is the distinct ...0000001.
+    assert encode_speed(0, _MODE_14) == 0x00
+    assert encode_speed(0, _MODE_14, estop=True) == 0x01
+
+
+def test_encode_speed_dcc14_table():
+    # §4.2 "DCC 14": step n -> R000 VVVV with VVVV = n + 1 (step 14 = 0x0F max).
+    assert encode_speed(1, _MODE_14) == 0x02
+    assert encode_speed(2, _MODE_14) == 0x03
+    assert encode_speed(13, _MODE_14) == 0x0E
+    assert encode_speed(14, _MODE_14) == 0x0F
+
+
+def test_encode_speed_dcc28_table_split_v5():
+    # §4.2 "DCC 28": the fifth bit V5 is the split intermediate step.
+    assert encode_speed(0, _MODE_28) == 0x00  # Stop
+    assert encode_speed(0, _MODE_28, estop=True) == 0x01  # E-Stop
+    assert encode_speed(1, _MODE_28) == 0x02
+    assert encode_speed(2, _MODE_28) == 0x12  # V5 set
+    assert encode_speed(3, _MODE_28) == 0x03
+    assert encode_speed(4, _MODE_28) == 0x13
+    assert encode_speed(27, _MODE_28) == 0x0F
+    assert encode_speed(28, _MODE_28) == 0x1F  # max
+
+
+def test_encode_speed_dcc128_table():
+    # §4.2 "DCC 128": value = step + 1 (step 126 = 0x7F max).
+    assert encode_speed(0, _MODE_128) == 0x00  # Stop
+    assert encode_speed(0, _MODE_128, estop=True) == 0x01  # E-Stop
+    assert encode_speed(1, _MODE_128) == 0x02
+    assert encode_speed(125, _MODE_128) == 0x7E
+    assert encode_speed(126, _MODE_128) == 0x7F
+
+
+def test_encode_speed_never_sets_direction_bit():
+    # encode_speed produces only the 7-bit VVVVVVV field; R lives in the builder.
+    for mode in (_MODE_14, _MODE_28, _MODE_128):
+        for step in range(0, mode - 1):
+            assert encode_speed(step, mode) & 0x80 == 0
+
+
+def test_encode_speed_roundtrip_all_modes():
+    for mode in (_MODE_14, _MODE_28, _MODE_128):
+        assert decode_speed(encode_speed(0, mode), mode) == (0, False)
+        assert decode_speed(encode_speed(0, mode, estop=True), mode) == (0, True)
+        for step in range(1, mode - 1):
+            assert decode_speed(encode_speed(step, mode), mode) == (step, False)
+
+
+def test_decode_speed_ignores_direction_bit():
+    # The R bit (0x80) must not perturb the decoded step for any mode.
+    for mode in (_MODE_14, _MODE_28, _MODE_128):
+        raw = encode_speed(5 if mode != _MODE_14 else 3, mode)
+        step, estop = decode_speed(raw | 0x80, mode)
+        assert estop is False
+        assert step == (5 if mode != _MODE_14 else 3)
+
+
+# --- Loco drive builder (§4.2) -----------------------------------------------
+
+
+def test_build_loco_drive_dcc128_forward_step1_addr3():
+    # Addr 3 (<128): DB1 = Adr_MSB = 0x00, DB2 = 0x03. S=3 -> DB0 = 0x13.
+    # DB3 = R(1) VVVVVVV(step1=0x02) = 0x82. XOR(E4,13,00,03,82)=0x76.
+    assert build_loco_drive(3, step=1, forward=True, speed_steps=128) == bytes.fromhex(
+        "0A0040 00 E4 13 00 03 82 76".replace(" ", "")
+    )
+
+
+def test_build_loco_drive_dcc128_reverse_step1_addr3():
+    # DB3 = R(0) 0x02 = 0x02. XOR(E4,13,00,03,02)=0xF6.
+    assert build_loco_drive(3, step=1, forward=False, speed_steps=128) == bytes.fromhex(
+        "0A004000E4130003 02 F6".replace(" ", "")
+    )
+
+
+def test_build_loco_drive_normal_stop_preserves_direction():
+    # Step 0 forward -> DB3 = 0x80 (R set, speed 0).
+    frame = build_loco_drive(3, step=0, forward=True, speed_steps=128)
+    assert frame[8] == 0x80  # DB3
+    # reverse stop -> DB3 = 0x00
+    frame_rev = build_loco_drive(3, step=0, forward=False, speed_steps=128)
+    assert frame_rev[8] == 0x00
+
+
+def test_build_loco_drive_estop_is_distinct_encoding():
+    # E-Stop forward -> DB3 = R(1) | 0x01 = 0x81, not 0x80 (normal stop).
+    frame = build_loco_drive(3, step=0, forward=True, speed_steps=128, estop=True)
+    assert frame[8] == 0x81
+    frame_rev = build_loco_drive(3, step=0, forward=False, speed_steps=128, estop=True)
+    assert frame_rev[8] == 0x01
+
+
+def test_build_loco_drive_step_modes_set_db0():
+    # DB0 = 0x10 | S; S = 0/2/3 for 14/28/128.
+    assert build_loco_drive(3, step=1, forward=True, speed_steps=14)[5] == 0x10
+    assert build_loco_drive(3, step=1, forward=True, speed_steps=28)[5] == 0x12
+    assert build_loco_drive(3, step=1, forward=True, speed_steps=128)[5] == 0x13
+
+
+def test_build_loco_drive_address_ge_128_sets_high_bits():
+    # Addr 128: Adr_MSB = 0, Adr_LSB = 128 -> DB1 = 0xC0 | 0x00 = 0xC0.
+    frame = build_loco_drive(128, step=1, forward=True, speed_steps=128)
+    assert frame[6] == 0xC0  # DB1
+    assert frame[7] == 0x80  # DB2 = Adr_LSB
+
+
+def test_build_loco_drive_large_address_packs_msb():
+    # Addr 1000 = 0x03E8: Adr_MSB = 0x03, Adr_LSB = 0xE8 -> DB1 = 0xC0|0x03 = 0xC3.
+    frame = build_loco_drive(1000, step=1, forward=True, speed_steps=128)
+    assert frame[6] == 0xC3
+    assert frame[7] == 0xE8
+
+
+def test_build_loco_drive_address_lt_128_leaves_high_bits_clear():
+    frame = build_loco_drive(3, step=1, forward=True, speed_steps=128)
+    assert frame[6] == 0x00  # DB1 = Adr_MSB, high bits not forced
+
+
+def test_build_loco_drive_dcc14_max_reverse():
+    # 14-step max (step 14), reverse: DB0=0x10, DB3 = 0x0F. XOR(E4,10,00,03,0F)=0xF8
+    assert build_loco_drive(3, step=14, forward=False, speed_steps=14) == bytes.fromhex(
+        "0A004000E4100003 0F F8".replace(" ", "")
+    )
+
+
+# --- Loco info/subscribe builder (§4.1) --------------------------------------
+
+
+def test_build_loco_info_get_addr3_exact_bytes():
+    # X-Header 0xE3, DB0 0xF0, DB1=Adr_MSB=0x00, DB2=Adr_LSB=0x03.
+    # XOR(E3,F0,00,03) = 0x10. DataLen 0x09.
+    assert build_loco_info_get(3) == bytes.fromhex("09004000E3F0000310")
+
+
+def test_build_loco_info_get_address_ge_128():
+    # Addr 200 = 0x00C8: Adr_MSB=0, Adr_LSB=0xC8, DB1 = 0xC0.
+    frame = build_loco_info_get(200)
+    assert frame[4] == 0xE3
+    assert frame[5] == 0xF0
+    assert frame[6] == 0xC0  # DB1 high bits forced
+    assert frame[7] == 0xC8  # DB2 = Adr_LSB
+
+
+# --- Loco info decoding (§4.4) -----------------------------------------------
+
+
+def test_decode_loco_info_from_real_frame():
+    # DB0=Adr_MSB, DB1=Adr_LSB (addr 3), DB2=0x04 (KKK=4 -> 128 steps, not busy),
+    # DB3 = R(1) | step-1 encoding (step 1 -> 0x02) = 0x82.
+    payload = bytes((0x00, 0x03, 0x04, 0x82))
+    info = _decode_loco_info(payload)
+    assert info is not None
+    assert info.address == 3
+    assert info.forward is True
+    assert info.speed == 1
+    assert info.estop is False
+    assert info.speed_steps == 128
+    assert info.busy is False
+
+
+def test_decode_loco_info_busy_and_reverse():
+    # DB2 = 0x08 -> B bit set (busy), KKK=0 (14 steps). DB3 = 0x0F reverse step14.
+    payload = bytes((0x00, 0x03, 0x08, 0x0F))
+    info = _decode_loco_info(payload)
+    assert info is not None
+    assert info.busy is True
+    assert info.speed_steps == 14
+    assert info.forward is False
+    assert info.speed == 14
+    assert info.estop is False
+
+
+def test_decode_loco_info_estop():
+    # DB3 = R(1) | E-Stop(1) = 0x81 -> estop True, speed 0.
+    payload = bytes((0x00, 0x03, 0x04, 0x81))
+    info = _decode_loco_info(payload)
+    assert info is not None
+    assert info.estop is True
+    assert info.speed == 0
+    assert info.forward is True
+
+
+def test_decode_loco_info_ignores_adr_msb_high_bits():
+    # The two highest bits of Adr_MSB must be ignored per §4.4.
+    payload = bytes((0xC3, 0xE8, 0x04, 0x82))  # 0xC3 & 0x3F = 0x03
+    info = _decode_loco_info(payload)
+    assert info is not None
+    assert info.address == 1000
+
+
+def test_decode_loco_info_28_step_split_v5():
+    # KKK=2 -> 28 steps. DB3 = 0x12 -> step 2 (V5 set), forward.
+    payload = bytes((0x00, 0x03, 0x02, 0x92))  # R set (0x80) | 0x12
+    info = _decode_loco_info(payload)
+    assert info is not None
+    assert info.speed_steps == 28
+    assert info.speed == 2
+    assert info.forward is True
+
+
+def test_decode_loco_info_short_payload():
+    assert _decode_loco_info(b"") is None
+    assert _decode_loco_info(b"\x00\x03\x04") is None  # need DB0..DB3
+
+
+def test_build_loco_info_exact_bytes_roundtrips_decode():
+    # build_loco_info frames a §4.4 datagram; decode_xbus recovers the dataset.
+    frame = build_loco_info(3, forward=True, step=1, speed_steps=128)
+    _, payload = protocol.split_datasets(frame)[0]
+    result = decode_xbus(payload)
+    assert result is not None
+    header, decoded = result
+    assert header == HDR_LOCO_INFO
+    assert isinstance(decoded, LocoInfo)
+    assert decoded.address == 3
+    assert decoded.speed == 1
+    assert decoded.forward is True
+    assert decoded.speed_steps == 128
+
+
+# --- Loco info X-bus routing (§4.4, X-Header 0xEF) ---------------------------
+
+
+def test_decode_xbus_routes_loco_info():
+    payload = build_loco_info(3, forward=True, step=1, speed_steps=128)[4:]
+    result = decode_xbus(payload)
+    assert result is not None
+    header, decoded = result
+    assert header == HDR_LOCO_INFO
+    assert isinstance(decoded, LocoInfo)
+
+
+def test_parse_datagram_surfaces_loco_info():
+    dgram = build_loco_info(7, forward=False, step=5, speed_steps=128)
+    (info,) = parse_datagram(dgram)
+    assert isinstance(info, LocoInfo)
+    assert info.address == 7
+    assert info.forward is False
+    assert info.speed == 5
 
 
 # --- Seam guard: no HA / socket / asyncio imports ---------------------------
