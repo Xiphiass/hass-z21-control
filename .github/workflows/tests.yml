@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    name: pytest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install dev dependencies
+        # Install the dev deps only, NOT the project itself. An editable install
+        # injects an `__editable__…finder.__path_hook__` entry onto sys.path that
+        # Home Assistant's custom-component loader tries to iterate, crashing the
+        # HA-coupled tests. The suite imports `custom_components.z21` directly
+        # from the repo root, so no install of the project is needed.
+        run: pip install "pytest>=7.0" "pytest-homeassistant-custom-component>=0.13.0"
+      - name: Run test suite
+        run: python -m pytest tests/ -q
