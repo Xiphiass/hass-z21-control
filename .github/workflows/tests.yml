@@ -12,7 +12,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        # HA 2026.1 (the hacs.json floor) requires Python >=3.13.2 and runs on
+        # both 3.13 and 3.14. Earlier Python versions can only resolve a
+        # years-old HA the integration no longer works against.
+        python-version: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,11 +23,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install dev dependencies
-        # Install the dev deps only, NOT the project itself. An editable install
-        # injects an `__editable__…finder.__path_hook__` entry onto sys.path that
-        # Home Assistant's custom-component loader tries to iterate, crashing the
-        # HA-coupled tests. The suite imports `custom_components.z21` directly
-        # from the repo root, so no install of the project is needed.
-        run: pip install "pytest>=7.0" "pytest-homeassistant-custom-component>=0.13.0"
+        # Non-editable install of the dev extra. The pytest-homeassistant pin
+        # lives in pyproject.toml so CI and local stay in lockstep. Do NOT use
+        # `-e .`: an editable install injects an
+        # `__editable__…finder.__path_hook__` entry onto sys.path that Home
+        # Assistant's custom-component loader iterates and crashes on. A plain
+        # install is fine — the suite imports custom_components.z21 from the
+        # repo root regardless.
+        run: pip install ".[dev]"
       - name: Run test suite
         run: python -m pytest tests/ -q

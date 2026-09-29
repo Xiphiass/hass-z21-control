@@ -147,8 +147,19 @@ async def test_user_flow_success(hass: HomeAssistant, monkeypatch) -> None:
         CONF_FW_VERSION: _FW_VERSION,
     }
 
-    device = dr.async_get(hass).async_get_device_by_identifier(
-        (DOMAIN, str(_SERIAL)), entry.entry_id
+    # Look the device up via the config entry rather than a registry helper:
+    # async_get_device(identifiers=...) is reported as an error by recent HA
+    # (identifiers are no longer unique across entries), while
+    # async_get_device_by_identifier() does not exist until HA 2026.3. Filtering
+    # the entry's devices by identifier is stable across the supported range.
+    registry = dr.async_get(hass)
+    device = next(
+        (
+            dev
+            for dev in dr.async_entries_for_config_entry(registry, entry.entry_id)
+            if (DOMAIN, str(_SERIAL)) in dev.identifiers
+        ),
+        None,
     )
     assert device is not None
     assert device.model == hw_type_name(_HW_TYPE)
