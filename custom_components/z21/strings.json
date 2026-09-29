@@ -20,15 +20,23 @@
   "options": {
     "step": {
       "init": {
-        "title": "Manage turnouts",
+        "title": "Manage hardware",
         "menu_options": {
-          "add": "Add a turnout",
-          "edit_select": "Edit a turnout",
-          "delete_select": "Delete a turnout",
+          "manage_turnouts": "Manage turnouts",
+          "manage_locos": "Manage locos",
           "done": "Save and reload"
         }
       },
-      "add": {
+      "manage_turnouts": {
+        "title": "Manage turnouts",
+        "menu_options": {
+          "turnout_add": "Add a turnout",
+          "turnout_edit_select": "Edit a turnout",
+          "turnout_delete_select": "Delete a turnout",
+          "init": "Back"
+        }
+      },
+      "turnout_add": {
         "title": "Add turnout",
         "data": {
           "name": "Name",
@@ -40,13 +48,13 @@
           "inverted": "Swap the on/off direction if the decoder is wired backwards (off = straight, on = diverging)."
         }
       },
-      "edit_select": {
+      "turnout_edit_select": {
         "title": "Edit a turnout",
         "data": {
           "id": "Turnout"
         }
       },
-      "edit": {
+      "turnout_edit": {
         "title": "Edit turnout",
         "data": {
           "name": "Name",
@@ -58,15 +66,61 @@
           "inverted": "Swap the on/off direction if the decoder is wired backwards (off = straight, on = diverging)."
         }
       },
-      "delete_select": {
+      "turnout_delete_select": {
         "title": "Delete a turnout",
         "data": {
           "id": "Turnout"
         }
+      },
+      "manage_locos": {
+        "title": "Manage locos",
+        "menu_options": {
+          "loco_add": "Add a loco",
+          "loco_edit_select": "Edit a loco",
+          "loco_delete_select": "Delete a loco",
+          "init": "Back"
+        }
+      },
+      "loco_add": {
+        "title": "Add loco",
+        "data": {
+          "name": "Name",
+          "address": "DCC address",
+          "speed_steps": "Speed steps"
+        },
+        "data_description": {
+          "address": "The DCC loco address, 1–10239.",
+          "speed_steps": "The DCC speed-step resolution your decoder uses (14 / 28 / 128). Leave at 128 for a modern decoder."
+        }
+      },
+      "loco_edit_select": {
+        "title": "Edit a loco",
+        "data": {
+          "id": "Loco"
+        }
+      },
+      "loco_edit": {
+        "title": "Edit loco",
+        "data": {
+          "name": "Name",
+          "address": "DCC address",
+          "speed_steps": "Speed steps"
+        },
+        "data_description": {
+          "address": "The DCC loco address, 1–10239.",
+          "speed_steps": "The DCC speed-step resolution your decoder uses (14 / 28 / 128). Leave at 128 for a modern decoder."
+        }
+      },
+      "loco_delete_select": {
+        "title": "Delete a loco",
+        "data": {
+          "id": "Loco"
+        }
       }
     },
     "error": {
-      "duplicate_address": "That function address is already assigned to another turnout."
+      "duplicate_address": "That address is already in use by another entry of the same type.",
+      "too_many_locos": "You can configure at most 16 locos (the Z21 caps loco feedback at 16 addresses)."
     }
   },
   "entity": {

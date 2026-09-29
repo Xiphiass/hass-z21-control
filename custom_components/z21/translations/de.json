@@ -20,15 +20,23 @@
   "options": {
     "step": {
       "init": {
-        "title": "Weichen verwalten",
+        "title": "Hardware verwalten",
         "menu_options": {
-          "add": "Weiche hinzufügen",
-          "edit_select": "Weiche bearbeiten",
-          "delete_select": "Weiche löschen",
+          "manage_turnouts": "Weichen verwalten",
+          "manage_locos": "Loks verwalten",
           "done": "Speichern und neu laden"
         }
       },
-      "add": {
+      "manage_turnouts": {
+        "title": "Weichen verwalten",
+        "menu_options": {
+          "turnout_add": "Weiche hinzufügen",
+          "turnout_edit_select": "Weiche bearbeiten",
+          "turnout_delete_select": "Weiche löschen",
+          "init": "Zurück"
+        }
+      },
+      "turnout_add": {
         "title": "Weiche hinzufügen",
         "data": {
           "name": "Name",
@@ -40,13 +48,13 @@
           "inverted": "Vertauscht die Ein-/Aus-Richtung, falls der Decoder verkehrt herum verdrahtet ist (Aus = gerade, Ein = abzweigend)."
         }
       },
-      "edit_select": {
+      "turnout_edit_select": {
         "title": "Weiche bearbeiten",
         "data": {
           "id": "Weiche"
         }
       },
-      "edit": {
+      "turnout_edit": {
         "title": "Weiche bearbeiten",
         "data": {
           "name": "Name",
@@ -58,15 +66,61 @@
           "inverted": "Vertauscht die Ein-/Aus-Richtung, falls der Decoder verkehrt herum verdrahtet ist (Aus = gerade, Ein = abzweigend)."
         }
       },
-      "delete_select": {
+      "turnout_delete_select": {
         "title": "Weiche löschen",
         "data": {
           "id": "Weiche"
         }
+      },
+      "manage_locos": {
+        "title": "Loks verwalten",
+        "menu_options": {
+          "loco_add": "Lok hinzufügen",
+          "loco_edit_select": "Lok bearbeiten",
+          "loco_delete_select": "Lok löschen",
+          "init": "Zurück"
+        }
+      },
+      "loco_add": {
+        "title": "Lok hinzufügen",
+        "data": {
+          "name": "Name",
+          "address": "DCC-Adresse",
+          "speed_steps": "Fahrstufen"
+        },
+        "data_description": {
+          "address": "Die DCC-Lokadresse, 1–10239.",
+          "speed_steps": "Die DCC-Fahrstufenauflösung Ihres Decoders (14 / 28 / 128). Für einen modernen Decoder bei 128 belassen."
+        }
+      },
+      "loco_edit_select": {
+        "title": "Lok bearbeiten",
+        "data": {
+          "id": "Lok"
+        }
+      },
+      "loco_edit": {
+        "title": "Lok bearbeiten",
+        "data": {
+          "name": "Name",
+          "address": "DCC-Adresse",
+          "speed_steps": "Fahrstufen"
+        },
+        "data_description": {
+          "address": "Die DCC-Lokadresse, 1–10239.",
+          "speed_steps": "Die DCC-Fahrstufenauflösung Ihres Decoders (14 / 28 / 128). Für einen modernen Decoder bei 128 belassen."
+        }
+      },
+      "loco_delete_select": {
+        "title": "Lok löschen",
+        "data": {
+          "id": "Lok"
+        }
       }
     },
     "error": {
-      "duplicate_address": "Diese Funktionsadresse ist bereits einer anderen Weiche zugewiesen."
+      "duplicate_address": "Diese Adresse wird bereits von einem anderen Eintrag desselben Typs verwendet.",
+      "too_many_locos": "Sie können höchstens 16 Loks konfigurieren (die Z21 begrenzt die Lok-Rückmeldung auf 16 Adressen)."
     }
   },
   "entity": {
