@@ -2,8 +2,9 @@
 
 Setup opens a live :class:`Z21Client`, registers the Z21 as a single HA Device,
 and runs a System State coordinator that feeds the binary sensor, sensor, switch,
-and button platforms. Alongside monitoring, the first station-wide controls (a
-track-power switch and an emergency-stop button) send on the same I/O seam.
+button, and number platforms. Alongside monitoring, the station-wide controls (a
+track-power switch and an emergency-stop button), turnouts, and per-loco drive
+entities (each loco its own Device) send on the same I/O seam.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from .coordinator import Z21Coordinator
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.NUMBER,
     Platform.SENSOR,
     Platform.SWITCH,
 ]

@@ -167,11 +167,22 @@
     "switch": {
       "track_power": {
         "name": "Gleisspannung"
+      },
+      "direction": {
+        "name": "Fahrtrichtung"
       }
     },
     "button": {
       "emergency_stop": {
         "name": "Nothalt"
+      },
+      "estop": {
+        "name": "Nothalt"
+      }
+    },
+    "number": {
+      "speed": {
+        "name": "Geschwindigkeit"
       }
     }
   }

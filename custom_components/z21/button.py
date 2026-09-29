@@ -8,6 +8,11 @@ there is no dedicated confirmation broadcast consumed — the existing
 its feedback, and an active stop is cleared by turning the track-power switch
 back on. The button is therefore stateless. The entity list is
 description-driven, mirroring the switch and sensor platforms.
+
+Each configured loco also gets its own **E-Stop** button (ADR-0003): an immediate
+per-loco stop sent as ``LAN_X_SET_LOCO_DRIVE`` (4.2) with the E-Stop code
+``R0000001``, preserving the last-known direction — distinct from the
+station-wide ``LAN_X_SET_STOP`` above.
 """
 
 from __future__ import annotations
@@ -23,8 +28,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import Z21Client
-from .const import CONF_SERIAL, DOMAIN
+from .const import CONF_LOCOS, CONF_SERIAL, DOMAIN
 from .coordinator import Z21Coordinator
+from .entity import Z21LocoEntity
 
 
 @dataclass(kw_only=True)
@@ -54,9 +60,14 @@ async def async_setup_entry(
 ) -> None:
     """Set up Z21 buttons from a config entry."""
     coordinator: Z21Coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
+    entities: list[Z21Button | Z21LocoEStop] = [
         Z21Button(coordinator, entry, description) for description in BUTTONS
+    ]
+    entities.extend(
+        Z21LocoEStop(coordinator, entry, loco)
+        for loco in entry.options.get(CONF_LOCOS, [])
     )
+    async_add_entities(entities)
 
 
 class Z21Button(CoordinatorEntity[Z21Coordinator], ButtonEntity):
@@ -80,3 +91,23 @@ class Z21Button(CoordinatorEntity[Z21Coordinator], ButtonEntity):
     async def async_press(self) -> None:
         """Send the command; feedback comes via System State, not an ACK."""
         self.entity_description.press_fn(self.coordinator.client)
+
+
+class Z21LocoEStop(Z21LocoEntity, ButtonEntity):
+    """A loco's immediate E-Stop, keeping its last-known direction.
+
+    Stateless like the station-wide button; the loco's speed ``number`` reading
+    0 (from the ``LAN_X_LOCO_INFO`` echo) is its feedback.
+    """
+
+    _attr_translation_key = "estop"
+    _attr_icon = "mdi:alert-octagon"
+
+    def __init__(
+        self, coordinator: Z21Coordinator, entry: ConfigEntry, loco: dict
+    ) -> None:
+        super().__init__(coordinator, entry, loco, "estop")
+
+    async def async_press(self) -> None:
+        """Send the per-loco E-Stop; feedback comes via ``LAN_X_LOCO_INFO``."""
+        self.coordinator.drive_loco(self._address, speed=0, estop=True)

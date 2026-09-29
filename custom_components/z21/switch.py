@@ -7,6 +7,9 @@ derives from ``not track_voltage_off`` in the System State snapshot, so it also
 reflects power changes made by other input devices (e.g. a multiMaus) or a short
 circuit. Fire-once, no retry or reconciliation. The entity list is
 description-driven, mirroring the sensor platforms.
+
+Configured turnouts and each configured loco's **direction** (on = forward,
+ADR-0003) are exposed here too.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import protocol
 from .client import Z21Client
 from .const import (
+    CONF_LOCOS,
     CONF_SERIAL,
     CONF_TURNOUTS,
     CONF_TURNOUT_FADR,
@@ -37,6 +41,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import Z21Coordinator
+from .entity import Z21LocoEntity
 
 
 @dataclass(kw_only=True)
@@ -69,7 +74,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up Z21 switches from a config entry."""
     coordinator: Z21Coordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[Z21Switch | Z21TurnoutSwitch] = [
+    entities: list[Z21Switch | Z21TurnoutSwitch | Z21LocoDirection] = [
         Z21Switch(coordinator, entry, description) for description in SWITCHES
     ]
     # Add turnout switches from configured turnouts
@@ -83,6 +88,10 @@ async def async_setup_entry(
                 inverted=turnout.get(CONF_TURNOUT_INVERTED, False),
             )
         )
+    entities.extend(
+        Z21LocoDirection(coordinator, entry, loco)
+        for loco in entry.options.get(CONF_LOCOS, [])
+    )
     async_add_entities(entities)
 
 
@@ -195,3 +204,35 @@ class Z21TurnoutSwitch(CoordinatorEntity[Z21Coordinator], SwitchEntity):
             self.coordinator.async_refresh_turnout(self._fadr),
             f"z21-turnout-refresh-{self._fadr}",
         )
+
+
+class Z21LocoDirection(Z21LocoEntity, SwitchEntity):
+    """A loco's direction as a switch: on = forward (non-optimistic, ADR-0003).
+
+    Direction and speed share one ``LAN_X_SET_LOCO_DRIVE`` (4.2), so a flip is
+    sent at the loco's last-known speed — faithfully, with no implicit stop
+    first (stop-first is left to automations, as on the Z21's own handsets).
+    ``is_on`` follows the reported ``LAN_X_LOCO_INFO``, not the command.
+    """
+
+    _attr_translation_key = "direction"
+    _attr_icon = "mdi:swap-horizontal"
+
+    def __init__(
+        self, coordinator: Z21Coordinator, entry: ConfigEntry, loco: dict
+    ) -> None:
+        super().__init__(coordinator, entry, loco, "direction")
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True for forward, or None before the first loco feedback."""
+        info = self._info
+        return None if info is None else info.forward
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Drive forward at the current speed; state follows feedback."""
+        self.coordinator.drive_loco(self._address, forward=True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Drive in reverse at the current speed; state follows feedback."""
+        self.coordinator.drive_loco(self._address, forward=False)
