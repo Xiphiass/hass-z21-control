@@ -1,7 +1,7 @@
 """Loco drive entity tests for the Z21 integration (issue #49).
 
 Each configured loco becomes its own HA Device (nested under the station via
-``via_device``) carrying a speed ``number``, a direction ``switch`` and an
+``via_device_id``) carrying a speed ``number``, a direction ``switch`` and an
 E-Stop ``button``. All three are non-optimistic: state follows the
 coordinator's last-known ``LocoInfo``, and every action emits a
 ``LAN_X_SET_LOCO_DRIVE`` composed from it (ADR-0003). Uses the same
@@ -171,22 +171,12 @@ def _drive(address: int, *, step: int, forward: bool, speed_steps: int,
 async def test_each_loco_is_a_device_under_the_station(
     hass: HomeAssistant, monkeypatch
 ) -> None:
-    """Every loco is its own Device, nested under the Z21 via ``via_device``."""
+    """Every loco is its own Device, nested under the Z21 via ``via_device_id``."""
     await _setup(hass, monkeypatch)
 
-    # Filter the entry's devices rather than async_get_device(identifiers=...),
-    # which recent HA rejects; stable across the supported range (see
-    # test_config_flow.py).
     dev_reg = dr.async_get(hass)
     entry_id = hass.config_entries.async_entries(DOMAIN)[0].entry_id
-    station = next(
-        (
-            dev
-            for dev in dr.async_entries_for_config_entry(dev_reg, entry_id)
-            if (DOMAIN, str(_SERIAL)) in dev.identifiers
-        ),
-        None,
-    )
+    station = dev_reg.async_get_device_by_identifier((DOMAIN, str(_SERIAL)), entry_id)
     assert station is not None
 
     ent_reg = er.async_get(hass)

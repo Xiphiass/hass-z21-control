@@ -46,7 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     ``ConfigEntryNotReady`` and HA retries.
     """
     serial = entry.data[CONF_SERIAL]
-    dr.async_get(hass).async_get_or_create(
+    station = dr.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, str(serial))},
         manufacturer=MANUFACTURER,
@@ -56,6 +56,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     coordinator = Z21Coordinator(hass, entry, Z21Client(entry.data[CONF_HOST]))
+    coordinator.station_device_id = station.id
     await coordinator.async_setup()
     try:
         await coordinator.async_config_entry_first_refresh()

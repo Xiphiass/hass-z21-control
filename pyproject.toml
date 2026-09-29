@@ -2,8 +2,8 @@
 name = "hass-z21-control"
 version = "0.1.0"
 description = "Home Assistant custom integration for Roco Z21-compatible command stations."
-# Home Assistant 2026.1 (the hacs.json floor) requires Python >=3.13.2.
-requires-python = ">=3.13.2"
+# Home Assistant 2026.8 (the hacs.json floor) requires Python >=3.14.2.
+requires-python = ">=3.14.2"
 # Zero runtime dependencies (pure-Python codec; transport uses stdlib asyncio).
 dependencies = []
 
@@ -14,10 +14,10 @@ dependencies = []
 #
 # pttcc is pinned exactly: it hard-pins the Home Assistant version it installs,
 # so an open range resolves a different HA per Python version — older pins even
-# backtrack to a years-old HA the integration no longer works against. 0.13.305
-# pins HA 2026.1.0 (the floor declared in hacs.json) and supports Python 3.13 and
-# 3.14. Bump this in lockstep with the hacs.json floor.
-dev = ["pytest>=7.0", "pytest-homeassistant-custom-component==0.13.305"]
+# backtrack to a years-old HA the integration no longer works against. 0.13.354
+# pins HA 2026.8.0 (the floor declared in hacs.json) and requires Python 3.14.
+# Bump this in lockstep with the hacs.json floor.
+dev = ["pytest>=7.0", "pytest-homeassistant-custom-component==0.13.354"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

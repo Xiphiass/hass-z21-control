@@ -104,7 +104,7 @@ the default HACS store).
 4. Go to **Settings → Devices & services → Add integration**, search for
    **Z21**, and enter the command station's host IP (port is fixed at 21105).
 
-Requires Home Assistant **2026.1.0** or newer.
+Requires Home Assistant **2026.8.0** or newer.
 
 ## Architecture
 

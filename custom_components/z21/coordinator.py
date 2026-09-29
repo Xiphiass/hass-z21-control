@@ -85,6 +85,9 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
             update_interval=timedelta(seconds=KEEPALIVE_INTERVAL),
         )
         self.client = client
+        # Device-registry id of the station Device, set by setup before the
+        # platforms are forwarded; loco Devices nest under it (via_device_id).
+        self.station_device_id: str | None = None
         self._unsub: Callable[[], None] | None = None
         # Set while a poll awaits its reply; the receive handler resolves it.
         self._waiter: asyncio.Future[protocol.SystemState] | None = None

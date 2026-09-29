@@ -12,10 +12,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # HA 2026.1 (the hacs.json floor) requires Python >=3.13.2 and runs on
-        # both 3.13 and 3.14. Earlier Python versions can only resolve a
-        # years-old HA the integration no longer works against.
-        python-version: ["3.13", "3.14"]
+        # HA 2026.8 (the hacs.json floor) requires Python >=3.14.2. Earlier
+        # Python versions can only resolve an older HA the integration no longer
+        # works against (loco Devices nest via `via_device_id`, new in 2026.8).
+        python-version: ["3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

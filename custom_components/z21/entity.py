@@ -1,7 +1,7 @@
 """Shared base for the per-loco drive entities (ADR-0003).
 
 Each configured loco is its own HA **Device**, nested under the Z21 station via
-``via_device``, carrying a speed ``number``, a direction ``switch`` and an E-Stop
+``via_device_id``, carrying a speed ``number``, a direction ``switch`` and an E-Stop
 ``button`` (CONTEXT.md "Loco entities"). The Device is keyed by the loco's stable
 ``id`` rather than its DCC address, so an address edit in the options flow keeps
 the same Device; the entity unique_ids are address-based
@@ -64,8 +64,9 @@ class Z21LocoEntity(CoordinatorEntity[Z21Coordinator]):
         self._attr_device_info = DeviceInfo(
             identifiers={loco_device_identifier(serial, loco)},
             name=loco[CONF_LOCO_NAME],
-            via_device=(DOMAIN, str(serial)),
         )
+        if coordinator.station_device_id is not None:
+            self._attr_device_info["via_device_id"] = coordinator.station_device_id
 
     @property
     def _info(self) -> protocol.LocoInfo | None:
