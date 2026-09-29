@@ -18,6 +18,7 @@ from .client import Z21Client
 from .const import (
     CONF_FW_VERSION,
     CONF_HW_TYPE,
+    CONF_LOCOS,
     CONF_SERIAL,
     DOMAIN,
     MANUFACTURER,
@@ -25,6 +26,7 @@ from .const import (
     hw_type_name,
 )
 from .coordinator import Z21Coordinator
+from .entity import loco_device_identifier
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -75,3 +77,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator: Z21Coordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.async_shutdown_client()
     return unloaded
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: ConfigEntry, device: dr.DeviceEntry
+) -> bool:
+    """Allow deleting a stale loco Device from the UI.
+
+    A loco deleted in the options flow leaves its Device behind; the station
+    Device and the Devices of still-configured locos are refused.
+    """
+    serial = entry.data[CONF_SERIAL]
+    in_use = {(DOMAIN, str(serial))} | {
+        loco_device_identifier(serial, loco)
+        for loco in entry.options.get(CONF_LOCOS, [])
+    }
+    return not device.identifiers & in_use

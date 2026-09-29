@@ -385,3 +385,51 @@ async def test_estop_is_not_the_station_wide_stop(
     assert transport.sent == [
         _drive(3, step=0, forward=True, speed_steps=128, estop=True)
     ]
+
+
+async def test_direction_flip_clamps_out_of_range_speed(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """A step reported beyond the configured mode is re-sent clamped, not raw."""
+    transport = await _setup(hass, monkeypatch)
+    # Köf is configured for 14 steps, but the Z21 reports it in 128-step mode.
+    await _feed(hass, transport, address=7, forward=True, step=100, speed_steps=128)
+    entity_id = _entity_id(hass, "switch", 7, "direction")
+    transport.sent.clear()
+
+    await hass.services.async_call(
+        "switch", "turn_off", {"entity_id": entity_id}, blocking=True
+    )
+
+    assert transport.sent == [_drive(7, step=14, forward=False, speed_steps=14)]
+
+
+# --- Device removal ---------------------------------------------------------
+
+
+async def test_only_stale_loco_devices_are_removable(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """A deleted loco's Device may be removed; the station and live locos not."""
+    from custom_components.z21 import async_remove_config_entry_device
+
+    await _setup(hass, monkeypatch)
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    dev_reg = dr.async_get(hass)
+    devices = {
+        next(iter(dev.identifiers))[1]: dev
+        for dev in dr.async_entries_for_config_entry(dev_reg, entry.entry_id)
+    }
+    stale = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, f"{_SERIAL}_loco_loco-deleted")},
+        name="Deleted loco",
+    )
+
+    assert not await async_remove_config_entry_device(
+        hass, entry, devices[str(_SERIAL)]
+    )
+    assert not await async_remove_config_entry_device(
+        hass, entry, devices[f"{_SERIAL}_loco_loco-br218"]
+    )
+    assert await async_remove_config_entry_device(hass, entry, stale)

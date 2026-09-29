@@ -19,6 +19,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import protocol
 from .const import CONF_LOCOS, DOMAIN
 from .coordinator import Z21Coordinator
 from .entity import Z21LocoEntity
@@ -53,9 +54,7 @@ class Z21LocoSpeed(Z21LocoEntity, NumberEntity):
     ) -> None:
         super().__init__(coordinator, entry, loco, "speed")
         # 128-step mode has 126 drivable steps (plus Stop / E-Stop codes).
-        self._attr_native_max_value = (
-            126 if self._speed_steps == 128 else self._speed_steps
-        )
+        self._attr_native_max_value = protocol.max_speed_step(self._speed_steps)
         # Last out-of-range step logged, so a steady report warns only once.
         self._clamped_from: int | None = None
 

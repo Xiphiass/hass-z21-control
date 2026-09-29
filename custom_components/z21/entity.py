@@ -32,6 +32,16 @@ from .const import (
 from .coordinator import Z21Coordinator
 
 
+def loco_device_identifier(serial: int, loco: dict) -> tuple[str, str]:
+    """Return the device-registry identifier of a configured loco's Device.
+
+    Keyed by the stable loco ``id`` when present (the options flow always assigns
+    one); a hand-written entry lacking it falls back to the address.
+    """
+    loco_key = loco.get(CONF_LOCO_ID) or f"address_{loco[CONF_LOCO_ADDRESS]}"
+    return (DOMAIN, f"{serial}_loco_{loco_key}")
+
+
 class Z21LocoEntity(CoordinatorEntity[Z21Coordinator]):
     """A drive entity belonging to one configured loco's Device."""
 
@@ -51,11 +61,8 @@ class Z21LocoEntity(CoordinatorEntity[Z21Coordinator]):
             CONF_LOCO_SPEED_STEPS, LOCO_SPEED_STEPS_DEFAULT
         )
         self._attr_unique_id = f"{serial}_loco_{self._address}_{suffix}"
-        # Stable id when present (options flow always assigns one); fall back to
-        # the address for a hand-written entry that lacks it.
-        loco_key = loco.get(CONF_LOCO_ID) or f"address_{self._address}"
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{serial}_loco_{loco_key}")},
+            identifiers={loco_device_identifier(serial, loco)},
             name=loco[CONF_LOCO_NAME],
             via_device=(DOMAIN, str(serial)),
         )
