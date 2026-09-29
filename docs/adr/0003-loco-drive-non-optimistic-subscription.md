@@ -63,3 +63,10 @@ it carries two protocol constraints that shape the code in surprising ways:
 - A configured step mode that disagrees with the mode the Z21 reports in
   feedback can yield a reported step above the slider max; the entity clamps and
   logs rather than raising.
+- On the send side, a composed command (direction flip or E-Stop with speed
+  omitted) **rescales** the last-known step from the reported mode into the
+  configured mode before encoding. The step keeps its position in the drivable
+  range, rounded, and never rounds a moving loco down to Stop. The command is
+  always sent in the configured mode, never the reported one, because the
+  configured mode records what the decoder supports. Re-encoding the raw step
+  without rescaling would turn a flip at 100/128 into 3/28 (#55).

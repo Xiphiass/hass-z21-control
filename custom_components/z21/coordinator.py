@@ -203,16 +203,24 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         has arrived (ADR-0003). Always sends; state is **not** updated
         optimistically — it follows the Z21's subscription feedback.
 
-        The step is clamped to the configured mode's maximum: a last-known speed
-        reported in a wider mode than configured (which the speed ``number``
-        clamps for display) must not be re-encoded as an invalid code.
+        A last-known speed is a raw step in the mode the Z21 *reported*; it is
+        rescaled into the loco's *configured* mode before encoding, so a
+        direction flip or E-Stop keeps the actual speed when the two modes
+        differ (ADR-0003). The step is then clamped to the configured maximum
+        so it can never be encoded as an invalid code.
         """
         last = self._loco_states.get(address)
+        speed_steps = self._loco_speed_steps(address)
         if speed is None:
-            speed = last.speed if last is not None else 0
+            speed = (
+                protocol.rescale_speed_step(
+                    last.speed, last.speed_steps, speed_steps
+                )
+                if last is not None
+                else 0
+            )
         if forward is None:
             forward = last.forward if last is not None else True
-        speed_steps = self._loco_speed_steps(address)
         self.client.set_loco_drive(
             address,
             step=max(0, min(speed, protocol.max_speed_step(speed_steps))),

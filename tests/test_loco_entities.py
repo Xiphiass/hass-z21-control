@@ -377,10 +377,10 @@ async def test_estop_is_not_the_station_wide_stop(
     ]
 
 
-async def test_direction_flip_clamps_out_of_range_speed(
+async def test_direction_flip_rescales_mismatched_speed(
     hass: HomeAssistant, monkeypatch
 ) -> None:
-    """A step reported beyond the configured mode is re-sent clamped, not raw."""
+    """A step reported in another mode is re-sent rescaled, not raw (ADR-0003)."""
     transport = await _setup(hass, monkeypatch)
     # Köf is configured for 14 steps, but the Z21 reports it in 128-step mode.
     await _feed(hass, transport, address=7, forward=True, step=100, speed_steps=128)
@@ -391,7 +391,7 @@ async def test_direction_flip_clamps_out_of_range_speed(
         "switch", "turn_off", {"entity_id": entity_id}, blocking=True
     )
 
-    assert transport.sent == [_drive(7, step=14, forward=False, speed_steps=14)]
+    assert transport.sent == [_drive(7, step=11, forward=False, speed_steps=14)]
 
 
 # --- Device removal ---------------------------------------------------------

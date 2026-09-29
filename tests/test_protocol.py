@@ -748,3 +748,30 @@ def test_codec_has_no_forbidden_imports():
     src = Path(protocol.__file__).read_text()
     for forbidden in ("import asyncio", "import socket", "homeassistant"):
         assert forbidden not in src, f"protocol.py must not reference {forbidden!r}"
+
+
+# --- rescale_speed_step (4.2) -----------------------------------------------
+
+
+def test_rescale_speed_step_between_modes():
+    assert protocol.rescale_speed_step(100, 128, 28) == 22
+    assert protocol.rescale_speed_step(20, 28, 128) == 90
+    assert protocol.rescale_speed_step(126, 128, 14) == 14
+    assert protocol.rescale_speed_step(28, 28, 128) == 126
+
+
+def test_rescale_speed_step_same_mode_is_identity():
+    for steps in (14, 28, 128):
+        top = protocol.max_speed_step(steps)
+        assert [protocol.rescale_speed_step(s, steps, steps) for s in range(top + 1)] == list(
+            range(top + 1)
+        )
+
+
+def test_rescale_speed_step_stop_stays_stop_and_moving_stays_moving():
+    assert protocol.rescale_speed_step(0, 128, 14) == 0
+    assert protocol.rescale_speed_step(1, 128, 14) == 1
+
+
+def test_rescale_speed_step_clamps_out_of_range_source():
+    assert protocol.rescale_speed_step(200, 128, 28) == 28

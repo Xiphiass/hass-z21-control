@@ -228,3 +228,71 @@ def test_drive_loco_always_sends_even_when_unchanged(mock_client):
     coordinator.drive_loco(3, speed=20)
 
     mock_client.set_loco_drive.assert_called_once()
+
+
+# --- drive_loco: reported vs configured step-mode mismatch (ADR-0003) --------
+
+
+def test_drive_loco_direction_rescales_wider_reported_mode(mock_client):
+    """128-reported step 100 on a 28-configured loco flips at ~100/126, not 3/28."""
+    coordinator = _make_coordinator(mock_client, locos=[_loco(3, speed_steps=28)])
+    coordinator._handle_message(
+        HDR_LOCO_INFO, _info(3, forward=True, speed=100, speed_steps=128)
+    )
+
+    coordinator.drive_loco(3, forward=False)
+
+    _, kwargs = _drive_kwargs(mock_client)
+    assert kwargs == {"step": 22, "forward": False, "speed_steps": 28,
+                      "estop": False}
+
+
+def test_drive_loco_direction_rescales_narrower_reported_mode(mock_client):
+    """28-reported step 20 on a 128-configured loco flips at 90/126, not 20/126."""
+    coordinator = _make_coordinator(mock_client, locos=[_loco(3, speed_steps=128)])
+    coordinator._handle_message(
+        HDR_LOCO_INFO, _info(3, forward=True, speed=20, speed_steps=28)
+    )
+
+    coordinator.drive_loco(3, forward=False)
+
+    _, kwargs = _drive_kwargs(mock_client)
+    assert (kwargs["step"], kwargs["speed_steps"]) == (90, 128)
+
+
+def test_drive_loco_estop_rescales_last_known_speed(mock_client):
+    coordinator = _make_coordinator(mock_client, locos=[_loco(3, speed_steps=28)])
+    coordinator._handle_message(
+        HDR_LOCO_INFO, _info(3, forward=False, speed=100, speed_steps=128)
+    )
+
+    coordinator.drive_loco(3, estop=True)
+
+    _, kwargs = _drive_kwargs(mock_client)
+    assert (kwargs["step"], kwargs["forward"], kwargs["estop"]) == (22, False, True)
+
+
+def test_drive_loco_rescale_keeps_a_moving_loco_moving(mock_client):
+    """A crawl in a finer mode never rounds down to Stop in a coarser one."""
+    coordinator = _make_coordinator(mock_client, locos=[_loco(3, speed_steps=14)])
+    coordinator._handle_message(
+        HDR_LOCO_INFO, _info(3, speed=1, speed_steps=128)
+    )
+
+    coordinator.drive_loco(3, forward=False)
+
+    _, kwargs = _drive_kwargs(mock_client)
+    assert kwargs["step"] == 1
+
+
+def test_drive_loco_explicit_speed_is_not_rescaled(mock_client):
+    """An explicit speed is already in the configured mode (the slider's)."""
+    coordinator = _make_coordinator(mock_client, locos=[_loco(3, speed_steps=28)])
+    coordinator._handle_message(
+        HDR_LOCO_INFO, _info(3, speed=100, speed_steps=128)
+    )
+
+    coordinator.drive_loco(3, speed=10)
+
+    _, kwargs = _drive_kwargs(mock_client)
+    assert kwargs["step"] == 10
