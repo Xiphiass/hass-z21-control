@@ -45,6 +45,11 @@ HDR_SYSTEMSTATE_DATACHANGED = 0x84  # LAN_SYSTEMSTATE_DATACHANGED (2.18)
 # (see ``_XBUS_DISPATCH``), so the client's pending-future dict and the
 # coordinator can key on it directly.
 HDR_TURNOUT_INFO = 0x43  # LAN_X_TURNOUT_INFO X-Header (5.3)
+# NOTE: 0xEF is the *X-Header* of LAN_X_LOCO_INFO (4.4), likewise carried under
+# HDR_X (0x40), not a top-level Header. Kept as the stable logical routing key
+# ``decode_xbus`` surfaces loco feedback under (see ``_XBUS_DISPATCH``), so the
+# client's pending-future dict and the coordinator can key on it directly.
+HDR_LOCO_INFO = 0xEF  # LAN_X_LOCO_INFO X-Header (4.4)
 
 # --- Broadcast flags (2.16) -------------------------------------------------
 
@@ -233,6 +238,154 @@ def build_turnout_info(fadr: int, zz: int) -> bytes:
     return build_xbus(0x43, bytes((fadr_ms, fadr_ls, zz & 0x03)))
 
 
+# Speed-step mode -> the KKK value the Z21 reports in LAN_X_LOCO_INFO DB2 (4.4);
+# the inverse of ``_INFO_KKK_TO_STEPS`` (defined in the loco-drive section).
+_STEPS_TO_INFO_KKK = {14: 0x00, 28: 0x02, 128: 0x04}
+
+
+def build_loco_info(
+    address: int,
+    *,
+    forward: bool,
+    step: int,
+    speed_steps: int,
+    estop: bool = False,
+    busy: bool = False,
+) -> bytes:
+    """LAN_X_LOCO_INFO datagram as the Z21 sends it (4.4).
+
+    The inbound counterpart to :func:`build_loco_info_get`, framed under
+    ``HDR_X`` with X-Header ``0xEF``. Provided so tests (and any round-trip)
+    exercise the real wire format rather than a fabricated header. DB2 is
+    ``0000BKKK`` (B = busy, KKK the speed-step code) and DB3 is ``RVVVVVVV``.
+    Function bits (DB4–DB8) are omitted — the decoder leaves them unparsed.
+
+    Example — addr 3, DCC 128, forward, step 1::
+
+        0A 00 40 00 EF 00 03 04 82 <xor>
+
+    """
+    adr_msb = (address >> 8) & 0x3F
+    adr_lsb = address & 0xFF
+    db2 = (0x08 if busy else 0x00) | _STEPS_TO_INFO_KKK[speed_steps]
+    db3 = (0x80 if forward else 0x00) | encode_speed(step, speed_steps, estop=estop)
+    return build_xbus(HDR_LOCO_INFO, bytes((adr_msb, adr_lsb, db2, db3)))
+
+
+# --- Loco drive: speed coding + builders (4.1, 4.2) --------------------------
+
+# Speed-step mode -> the S nibble of DB0 (``0x10 | S``) in LAN_X_SET_LOCO_DRIVE
+# (4.2). S=0: DCC 14, S=2: DCC 28, S=3: DCC 128. KKK in LAN_X_LOCO_INFO (4.4)
+# reports the same modes as 0/2/4; both mappings are derived from these three
+# canonical step counts.
+_DRIVE_S = {14: 0x00, 28: 0x02, 128: 0x03}
+# LAN_X_LOCO_INFO DB2 KKK field (4.4): 0=14, 2=28, 4=128.
+_INFO_KKK_TO_STEPS = {0: 14, 2: 28, 4: 128}
+
+
+def encode_speed(step: int, speed_steps: int, *, estop: bool = False) -> int:
+    """Encode a raw speed ``step`` into the 7-bit ``VVVVVVV`` field of DB3 (4.2).
+
+    The returned value never has the direction bit (0x80) set — the caller ORs
+    ``R`` in. ``step`` 0 is a **normal Stop** (``0000000``); ``estop=True`` is the
+    distinct **E-Stop** encoding (``0000001``), which takes precedence over the
+    step value. The coding mirrors NMRA S 9.2 / S 9.2.1:
+
+    - **14** (S=0): ``000 VVVV`` with ``VVVV = step + 1`` (step 14 -> ``0x0F``).
+    - **28** (S=2): the fifth bit ``V5`` carries the split intermediate step —
+      ``raw = step + 3``; the low four bits are ``raw >> 1`` and ``V5`` is
+      ``raw & 1`` (step 1 -> ``0x02``, step 2 -> ``0x12``, step 28 -> ``0x1F``).
+    - **128** (S=3): ``VVVVVVV = step + 1`` (step 126 -> ``0x7F``).
+    """
+    if estop:
+        return 0x01
+    if step <= 0:
+        return 0x00
+    if speed_steps == 28:
+        raw = step + 3  # 2..29 map onto the split-V5 layout
+        return ((raw & 1) << 4) | ((raw >> 1) & 0x0F)
+    # 14 and 128 share the plain "value = step + 1" coding, differing only in
+    # width (which the caller's step range already bounds).
+    return (step + 1) & 0x7F
+
+
+def decode_speed(db3: int, speed_steps: int) -> tuple[int, bool]:
+    """Decode DB3 ``RVVVVVVV`` into ``(step, estop)`` — the inverse of speed coding.
+
+    The direction bit ``R`` (0x80) is ignored; only the 7-bit speed field is
+    read. Returns ``(0, False)`` for Stop and ``(0, True)`` for E-Stop. Mirrors
+    :func:`encode_speed` across all three modes (4.2, and 4.4's shared coding).
+    """
+    v = db3 & 0x7F
+    if speed_steps == 28:
+        low4 = v & 0x0F
+        if low4 == 0:  # V5-independent: ...0 0000 is Stop
+            return 0, False
+        if low4 == 1:  # ...0 0001 is E-Stop
+            return 0, True
+        v5 = (v >> 4) & 0x01
+        return ((low4 << 1) | v5) - 3, False
+    # 14 and 128: plain value = step + 1; 0 = Stop, 1 = E-Stop.
+    if v == 0:
+        return 0, False
+    if v == 1:
+        return 0, True
+    return v - 1, False
+
+
+def build_loco_drive(
+    address: int,
+    *,
+    step: int,
+    forward: bool,
+    speed_steps: int,
+    estop: bool = False,
+) -> bytes:
+    """LAN_X_SET_LOCO_DRIVE (4.2): set a loco's coupled speed **and** direction.
+
+    X-Header ``0xE4``, DB0 ``0x10 | S`` (S from ``speed_steps``), the loco
+    address packed as ``Adr_MSB = (address >> 8) & 0x3F`` / ``Adr_LSB``, and DB3
+    ``RVVVVVVV`` where ``R`` is the direction (1 = forward) and ``VVVVVVV`` is
+    :func:`encode_speed`. Addresses ≥ 128 set the two high bits of DB1
+    (``DB1 = 0xC0 | Adr_MSB``, spec 4.2); below 128 those bits are meaningless
+    but the command still works, so they are left clear.
+
+    ``step`` 0 is a normal Stop; ``estop=True`` emits the distinct E-Stop code.
+    Both preserve ``forward`` so a halt does not silently flip direction.
+
+    Example — addr 3, DCC 128, forward, step 1::
+
+        0A 00 40 00 E4 13 00 03 82 76
+
+    """
+    db0 = 0x10 | _DRIVE_S[speed_steps]
+    adr_msb = (address >> 8) & 0x3F
+    adr_lsb = address & 0xFF
+    db1 = (0xC0 | adr_msb) if address >= 128 else adr_msb
+    r_bit = 0x80 if forward else 0x00
+    db3 = r_bit | encode_speed(step, speed_steps, estop=estop)
+    return build_xbus(0xE4, bytes((db0, db1, adr_lsb, db3)))
+
+
+def build_loco_info_get(address: int) -> bytes:
+    """LAN_X_GET_LOCO_INFO request (4.1): poll **and** subscribe a loco.
+
+    X-Header ``0xE3``, DB0 ``0xF0``, address packed as in :func:`build_loco_drive`
+    (the ``0xC0 | Adr_MSB`` rule for addresses ≥ 128). Sending this both returns
+    the current LAN_X_LOCO_INFO and subscribes the client to future changes for
+    this address (in combination with the driving/switching broadcast flag).
+
+    Example — addr 3::
+
+        09 00 40 00 E3 F0 00 03 10
+
+    """
+    adr_msb = (address >> 8) & 0x3F
+    adr_lsb = address & 0xFF
+    db1 = (0xC0 | adr_msb) if address >= 128 else adr_msb
+    return build_xbus(0xE3, bytes((0xF0, db1, adr_lsb)))
+
+
 # --- Receive path: decoded datasets -----------------------------------------
 
 
@@ -298,6 +451,51 @@ def _decode_turnout_info(payload: bytes) -> TurnoutInfo | None:
     else:
         position = None  # ZZ=00 not switched yet, or ZZ=11 invalid
     return TurnoutInfo(fadr=fadr, position=position, invalid=zz == 3)
+
+
+@dataclass(frozen=True)
+class LocoInfo:
+    """Decoded LAN_X_LOCO_INFO response (4.4) — drive fields only.
+
+    ``speed`` is the raw DCC step (0 = Stop); ``estop`` distinguishes an
+    immediate emergency stop from a normal step-0 stop. ``speed_steps`` is the
+    mode the Z21 reports (14 / 28 / 128) and ``busy`` is True when the loco is
+    being driven by another X-BUS handset. Function bits (DB4–DB8) are
+    intentionally left unparsed until loco functions ship.
+    """
+
+    address: int  # DCC loco address
+    forward: bool  # direction: True = forward (R bit)
+    speed: int  # raw speed step, 0 = Stop
+    estop: bool  # True = immediate emergency stop
+    speed_steps: int  # reported mode: 14, 28, or 128
+    busy: bool  # controlled by another handset
+
+
+def _decode_loco_info(payload: bytes) -> LocoInfo | None:
+    """Decode a loco-info payload (DB0..DB3); ``None`` if too short.
+
+    Reads only the drive fields: address (DB0/DB1, high bits of Adr_MSB ignored
+    per 4.4), the busy bit and speed-step code from DB2 ``0000BKKK``, and
+    direction/speed from DB3 ``RVVVVVVV`` via :func:`decode_speed`. An unknown
+    KKK defaults to 128-step decoding rather than raising.
+    """
+    if len(payload) < 4:  # need DB0..DB3
+        return None
+    adr_msb, adr_lsb, db2, db3 = struct.unpack_from("<BBBB", payload, 0)
+    address = ((adr_msb & 0x3F) << 8) | adr_lsb
+    busy = bool(db2 & 0x08)
+    speed_steps = _INFO_KKK_TO_STEPS.get(db2 & 0x07, 128)
+    forward = bool(db3 & 0x80)
+    speed, estop = decode_speed(db3, speed_steps)
+    return LocoInfo(
+        address=address,
+        forward=forward,
+        speed=speed,
+        estop=estop,
+        speed_steps=speed_steps,
+        busy=busy,
+    )
 
 
 @dataclass(frozen=True)
@@ -399,6 +597,7 @@ def _decode_system_state(payload: bytes) -> SystemState | None:
 # later is one new entry here plus its decoder.
 _XBUS_DISPATCH = {
     0x43: (HDR_TURNOUT_INFO, _decode_turnout_info),
+    0xEF: (HDR_LOCO_INFO, _decode_loco_info),
 }
 
 
@@ -492,7 +691,7 @@ def split_datasets(data: bytes) -> list[tuple[int, bytes]]:
     return datasets
 
 
-def parse_datagram(data: bytes) -> list[SystemState | TurnoutInfo]:
+def parse_datagram(data: bytes) -> list[SystemState | TurnoutInfo | LocoInfo]:
     """Split a UDP payload into datasets and decode the known ones.
 
     Length-driven and total: walks the buffer via :func:`split_datasets`,
@@ -500,7 +699,7 @@ def parse_datagram(data: bytes) -> list[SystemState | TurnoutInfo]:
     Unknown headers, short/malformed datasets, and older firmware payloads are
     skipped — this never raises on bad input.
     """
-    results: list[SystemState | TurnoutInfo] = []
+    results: list[SystemState | TurnoutInfo | LocoInfo] = []
     for header, payload in split_datasets(data):
         if header == HDR_X:
             xbus = decode_xbus(payload)
