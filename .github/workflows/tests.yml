@@ -1,0 +1,35 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    name: pytest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # HA 2026.1 (the hacs.json floor) requires Python >=3.13.2 and runs on
+        # both 3.13 and 3.14. Earlier Python versions can only resolve a
+        # years-old HA the integration no longer works against.
+        python-version: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install dev dependencies
+        # Non-editable install of the dev extra. The pytest-homeassistant pin
+        # lives in pyproject.toml so CI and local stay in lockstep. Do NOT use
+        # `-e .`: an editable install injects an
+        # `__editable__…finder.__path_hook__` entry onto sys.path that Home
+        # Assistant's custom-component loader iterates and crashes on. A plain
+        # install is fine — the suite imports custom_components.z21 from the
+        # repo root regardless.
+        run: pip install ".[dev]"
+      - name: Run test suite
+        run: python -m pytest tests/ -q
