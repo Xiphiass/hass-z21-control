@@ -55,8 +55,30 @@ new builder and/or a new dispatch entry + decoder — not a transport rewrite.
 ## Commands
 
 ```bash
+pip install ".[dev]"              # dev deps: pytest + pinned pytest-homeassistant
 python -m pytest tests/ -q        # full suite (fast, hermetic)
 ```
+
+Install the dev extra **plain, never `-e .`**: an editable install injects an
+`__editable__…finder.__path_hook__` entry onto `sys.path` that Home Assistant's
+custom-component loader iterates over and crashes on. The suite imports
+`custom_components.z21` from the repo root, so no editable install is needed.
+
+`pytest-homeassistant-custom-component` is **pinned exactly** in
+`pyproject.toml` because it hard-pins the Home Assistant version it installs — an
+open range resolves a different (often years-old, broken) HA per Python version.
+The pin tracks the `hacs.json` floor (HA 2026.1.0); **bump the two in lockstep**.
+That HA floor requires Python ≥3.13.2, so the code targets **3.13 and 3.14**;
+avoid HA-version-specific APIs that don't span that range (e.g. the config-flow
+test looks devices up via `async_entries_for_config_entry`, stable across the
+range, rather than newer registry helpers).
+
+## CI
+
+`.github/workflows/tests.yml` runs the suite on **3.13 and 3.14** on every PR
+and on push to `main`; `hassfest.yml` validates the manifest. All three checks
+(`pytest (py3.13)`, `pytest (py3.14)`, `hassfest`) are **required** by branch
+protection on `main` before a PR can merge.
 
 ## Agent skills
 
