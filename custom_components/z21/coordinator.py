@@ -7,7 +7,9 @@ the Z21's push model into a Home Assistant ``DataUpdateCoordinator``:
   State** broadcast group (``LAN_SET_BROADCASTFLAGS`` flag ``0x00000100``, spec
   2.16), registers a receive handler, and polls the initial position of every
   configured turnout so their states are known without waiting for the first
-  throw.
+  throw. Every configured loco is likewise polled **and subscribed** with
+  ``LAN_X_GET_LOCO_INFO`` (spec 4.1) so its ``LAN_X_LOCO_INFO`` feedback arrives
+  (ADR-0003).
 - A pushed ``LAN_SYSTEMSTATE_DATACHANGED`` (spec 2.18) is fed straight to entities
   via ``async_set_updated_data``.
 - The 30 s poll (``LAN_SYSTEMSTATE_GETDATA``, spec 2.19) doubles as a keepalive
@@ -20,9 +22,9 @@ datagram arrived within the **staleness window** (~2.5× keepalive); only silenc
 past that window surfaces as ``UpdateFailed`` (and, via
 ``async_config_entry_first_refresh``, ``ConfigEntryNotReady`` on setup), greying
 out the entities. On the first datagram after such a silence the broadcast flags
-are re-sent (they reset on the Z21's logoff/reconnect) and every configured
-turnout is re-polled, so a power-cycled Z21 recovers its turnout states without
-reloading the integration.
+are re-sent (they reset on the Z21's logoff/reconnect), every configured
+turnout is re-polled and every configured loco re-subscribed, so a power-cycled
+Z21 recovers its turnout and loco states without reloading the integration.
 
 This is the first layer with a Home Assistant dependency below the config flow;
 the transport (``client``) and codec (``protocol``) stay HA-free.
@@ -42,7 +44,15 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from . import protocol
 from .client import TURNOUT_DEACTIVATE_DELAY, Z21Client, Z21Timeout
-from .const import CONF_TURNOUT_FADR, CONF_TURNOUTS, DOMAIN
+from .const import (
+    CONF_LOCO_ADDRESS,
+    CONF_LOCO_SPEED_STEPS,
+    CONF_LOCOS,
+    CONF_TURNOUT_FADR,
+    CONF_TURNOUTS,
+    DOMAIN,
+    LOCO_SPEED_STEPS_DEFAULT,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,6 +97,10 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         # Maps turnout FAdr to position (0=output 1, 1=output 2, None=not
         # switched yet). The Z21 speaks only of outputs, not straight/branching.
         self._turnout_positions: dict[int, int | None] = {}
+        # Loco address -> last LAN_X_LOCO_INFO the Z21 reported. Speed and
+        # direction are one coupled wire command, so every drive command is
+        # composed from this (ADR-0003); absent until the first feedback.
+        self._loco_states: dict[int, protocol.LocoInfo] = {}
 
     async def async_setup(self) -> None:
         """Connect, subscribe to System State broadcasts, and start listening.
@@ -106,6 +120,7 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         )
         self._unsub = self.client.subscribe(self._handle_message)
         self._discover_turnouts()
+        self._discover_locos()
 
     def _discover_turnouts(self) -> None:
         """Poll the position of every configured turnout (LAN_X_GET_TURNOUT_INFO).
@@ -118,8 +133,19 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         for turnout in self.config_entry.options.get(CONF_TURNOUTS, []):
             self.client.request_turnout_info(turnout[CONF_TURNOUT_FADR])
 
+    def _discover_locos(self) -> None:
+        """Poll and subscribe every configured loco (LAN_X_GET_LOCO_INFO, 4.1).
+
+        Called alongside :meth:`_discover_turnouts` — on setup and on recovery
+        from silence, since the Z21 drops its per-client subscriptions on logoff.
+        Replies and later changes arrive as ``LAN_X_LOCO_INFO`` and update
+        :attr:`loco_states` via :meth:`_handle_message`.
+        """
+        for loco in self.config_entry.options.get(CONF_LOCOS, []):
+            self.client.request_loco_info(loco[CONF_LOCO_ADDRESS])
+
     def _handle_message(self, header: int, decoded: object) -> None:
-        """Route a decoded dataset; System State updates entities, TurnoutInfo updates positions."""
+        """Route a decoded dataset to System State, turnout positions, or loco state."""
         if header == protocol.HDR_SYSTEMSTATE_DATACHANGED and isinstance(
             decoded, protocol.SystemState
         ):
@@ -130,6 +156,7 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
                     | protocol.BROADCAST_FLAG_DRIVING_SWITCHING
                 )
                 self._discover_turnouts()
+                self._discover_locos()
                 self._stale = False
             waiter = self._waiter
             if waiter is not None and not waiter.done():
@@ -141,11 +168,57 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         ):
             self._turnout_positions[decoded.fadr] = decoded.position
             self.async_update_listeners()
+        elif header == protocol.HDR_LOCO_INFO and isinstance(
+            decoded, protocol.LocoInfo
+        ):
+            self._loco_states[decoded.address] = decoded
+            self.async_update_listeners()
 
     @property
     def turnout_positions(self) -> dict[int, int | None]:
         """Return a copy of the last known turnout positions (FAdr -> position)."""
         return dict(self._turnout_positions)
+
+    @property
+    def loco_states(self) -> dict[int, protocol.LocoInfo]:
+        """Return a copy of the last-known loco states (address -> LocoInfo)."""
+        return dict(self._loco_states)
+
+    def drive_loco(
+        self,
+        address: int,
+        *,
+        speed: int | None = None,
+        forward: bool | None = None,
+        estop: bool = False,
+    ) -> None:
+        """Send LAN_X_SET_LOCO_DRIVE (4.2), composing from last-known state.
+
+        Speed and direction share one wire command, so whichever of ``speed`` /
+        ``forward`` is omitted is taken from the loco's last reported
+        ``LAN_X_LOCO_INFO`` — defaulting to forward, speed 0 before any feedback
+        has arrived (ADR-0003). Always sends; state is **not** updated
+        optimistically — it follows the Z21's subscription feedback.
+        """
+        last = self._loco_states.get(address)
+        if speed is None:
+            speed = last.speed if last is not None else 0
+        if forward is None:
+            forward = last.forward if last is not None else True
+        self.client.set_loco_drive(
+            address,
+            step=speed,
+            forward=forward,
+            speed_steps=self._loco_speed_steps(address),
+            estop=estop,
+        )
+
+    def _loco_speed_steps(self, address: int) -> int:
+        """Return the configured speed-step mode for ``address`` (default 128)."""
+        for loco in self.config_entry.options.get(CONF_LOCOS, []):
+            if loco[CONF_LOCO_ADDRESS] == address:
+                return loco.get(CONF_LOCO_SPEED_STEPS, LOCO_SPEED_STEPS_DEFAULT)
+        return LOCO_SPEED_STEPS_DEFAULT
 
     async def async_refresh_turnout(self, fadr: int) -> None:
         """Re-poll a turnout's position after a throw settles (LAN_X_GET_TURNOUT_INFO, 5.1).
