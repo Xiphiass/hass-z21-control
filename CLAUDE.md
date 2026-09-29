@@ -67,18 +67,18 @@ custom-component loader iterates over and crashes on. The suite imports
 `pytest-homeassistant-custom-component` is **pinned exactly** in
 `pyproject.toml` because it hard-pins the Home Assistant version it installs — an
 open range resolves a different (often years-old, broken) HA per Python version.
-The pin tracks the `hacs.json` floor (HA 2026.1.0); **bump the two in lockstep**.
-That HA floor requires Python ≥3.13.2, so the code targets **3.13 and 3.14**;
-avoid HA-version-specific APIs that don't span that range (e.g. the config-flow
-test looks devices up via `async_entries_for_config_entry`, stable across the
-range, rather than newer registry helpers).
+The pin tracks the `hacs.json` floor (HA 2026.8.0); **bump the two in lockstep**.
+That HA floor requires Python ≥3.14.2, so the code targets **3.14**; avoid
+HA-version-specific APIs newer than the floor. The floor was raised from 2026.1
+for `DeviceInfo.via_device_id` (2026.8), which replaces the deprecated
+`via_device` (removed in 2027.8) for nesting loco Devices under the station.
 
 ## CI
 
-`.github/workflows/tests.yml` runs the suite on **3.13 and 3.14** on every PR
-and on push to `main`; `hassfest.yml` validates the manifest. All three checks
-(`pytest (py3.13)`, `pytest (py3.14)`, `hassfest`) are **required** by branch
-protection on `main` before a PR can merge.
+`.github/workflows/tests.yml` runs the suite on **3.14** on every PR and on push
+to `main`; `hassfest.yml` validates the manifest. Both checks
+(`pytest (py3.14)`, `hassfest`) are **required** by branch protection on `main`
+before a PR can merge.
 
 ## Agent skills
 

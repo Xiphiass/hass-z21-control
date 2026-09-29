@@ -2,8 +2,9 @@
 
 Setup opens a live :class:`Z21Client`, registers the Z21 as a single HA Device,
 and runs a System State coordinator that feeds the binary sensor, sensor, switch,
-and button platforms. Alongside monitoring, the first station-wide controls (a
-track-power switch and an emergency-stop button) send on the same I/O seam.
+button, and number platforms. Alongside monitoring, the station-wide controls (a
+track-power switch and an emergency-stop button), turnouts, and per-loco drive
+entities (each loco its own Device) send on the same I/O seam.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from .client import Z21Client
 from .const import (
     CONF_FW_VERSION,
     CONF_HW_TYPE,
+    CONF_LOCOS,
     CONF_SERIAL,
     DOMAIN,
     MANUFACTURER,
@@ -24,10 +26,12 @@ from .const import (
     hw_type_name,
 )
 from .coordinator import Z21Coordinator
+from .entity import loco_device_identifier
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.NUMBER,
     Platform.SENSOR,
     Platform.SWITCH,
 ]
@@ -42,7 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     ``ConfigEntryNotReady`` and HA retries.
     """
     serial = entry.data[CONF_SERIAL]
-    dr.async_get(hass).async_get_or_create(
+    station = dr.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, str(serial))},
         manufacturer=MANUFACTURER,
@@ -52,6 +56,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     coordinator = Z21Coordinator(hass, entry, Z21Client(entry.data[CONF_HOST]))
+    coordinator.station_device_id = station.id
     await coordinator.async_setup()
     try:
         await coordinator.async_config_entry_first_refresh()
@@ -73,3 +78,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator: Z21Coordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.async_shutdown_client()
     return unloaded
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: ConfigEntry, device: dr.DeviceEntry
+) -> bool:
+    """Allow deleting a stale loco Device from the UI.
+
+    A loco deleted in the options flow leaves its Device behind; the station
+    Device and the Devices of still-configured locos are refused.
+    """
+    serial = entry.data[CONF_SERIAL]
+    in_use = {(DOMAIN, str(serial))} | {
+        loco_device_identifier(serial, loco)
+        for loco in entry.options.get(CONF_LOCOS, [])
+    }
+    return not device.identifiers & in_use

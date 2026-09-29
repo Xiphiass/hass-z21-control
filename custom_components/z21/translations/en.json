@@ -167,11 +167,22 @@
     "switch": {
       "track_power": {
         "name": "Track power"
+      },
+      "direction": {
+        "name": "Direction"
       }
     },
     "button": {
       "emergency_stop": {
         "name": "Emergency stop"
+      },
+      "estop": {
+        "name": "Emergency stop"
+      }
+    },
+    "number": {
+      "speed": {
+        "name": "Speed"
       }
     }
   }

@@ -85,6 +85,9 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
             update_interval=timedelta(seconds=KEEPALIVE_INTERVAL),
         )
         self.client = client
+        # Device-registry id of the station Device, set by setup before the
+        # platforms are forwarded; loco Devices nest under it (via_device_id).
+        self.station_device_id: str | None = None
         self._unsub: Callable[[], None] | None = None
         # Set while a poll awaits its reply; the receive handler resolves it.
         self._waiter: asyncio.Future[protocol.SystemState] | None = None
@@ -199,17 +202,22 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         ``LAN_X_LOCO_INFO`` — defaulting to forward, speed 0 before any feedback
         has arrived (ADR-0003). Always sends; state is **not** updated
         optimistically — it follows the Z21's subscription feedback.
+
+        The step is clamped to the configured mode's maximum: a last-known speed
+        reported in a wider mode than configured (which the speed ``number``
+        clamps for display) must not be re-encoded as an invalid code.
         """
         last = self._loco_states.get(address)
         if speed is None:
             speed = last.speed if last is not None else 0
         if forward is None:
             forward = last.forward if last is not None else True
+        speed_steps = self._loco_speed_steps(address)
         self.client.set_loco_drive(
             address,
-            step=speed,
+            step=max(0, min(speed, protocol.max_speed_step(speed_steps))),
             forward=forward,
-            speed_steps=self._loco_speed_steps(address),
+            speed_steps=speed_steps,
             estop=estop,
         )
 

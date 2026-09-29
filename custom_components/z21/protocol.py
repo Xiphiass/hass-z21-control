@@ -283,6 +283,15 @@ _DRIVE_S = {14: 0x00, 28: 0x02, 128: 0x03}
 _INFO_KKK_TO_STEPS = {0: 14, 2: 28, 4: 128}
 
 
+def max_speed_step(speed_steps: int) -> int:
+    """Return the highest drivable step for a 14 / 28 / 128 step mode (4.2).
+
+    128-step mode has 126 drivable steps — its other two codes are Stop and
+    E-Stop — while 14 and 28 step modes drive up to their nominal count.
+    """
+    return 126 if speed_steps == 128 else speed_steps
+
+
 def encode_speed(step: int, speed_steps: int, *, estop: bool = False) -> int:
     """Encode a raw speed ``step`` into the 7-bit ``VVVVVVV`` field of DB3 (4.2).
 
