@@ -303,6 +303,98 @@ def test_request_turnout_info_without_transport_raises():
         c.request_turnout_info(0)
 
 
+# --- Loco drive (4.1, 4.2) --------------------------------------------------
+
+
+def test_set_loco_drive_sends_drive_frame_once():
+    """Fire-once: a single LAN_X_SET_LOCO_DRIVE, no Activate/Deactivate pairing."""
+
+    async def scenario():
+        c = Z21Client("192.0.2.10")
+        t = FakeTransport()
+        c._attach_transport(t)
+        c.set_loco_drive(3, step=1, forward=True, speed_steps=128)
+        await asyncio.sleep(client_mod.TURNOUT_DEACTIVATE_DELAY + 0.05)
+        return t
+
+    t = run(scenario())
+    assert t.sent == [
+        protocol.build_loco_drive(3, step=1, forward=True, speed_steps=128)
+    ]
+    assert t.sent[0] == bytes.fromhex("0A 00 40 00 E4 13 00 03 82 76")
+
+
+def test_set_loco_drive_estop_bytes():
+    c = Z21Client("192.0.2.10")
+    t = FakeTransport()
+    c._attach_transport(t)
+    c.set_loco_drive(300, step=5, forward=False, speed_steps=28, estop=True)
+    assert t.sent == [
+        protocol.build_loco_drive(
+            300, step=5, forward=False, speed_steps=28, estop=True
+        )
+    ]
+
+
+def test_set_loco_drive_without_transport_raises():
+    c = Z21Client("192.0.2.10")
+    with pytest.raises(RuntimeError):
+        c.set_loco_drive(3, step=0, forward=True, speed_steps=128)
+
+
+def test_request_loco_info_sends_request_and_resolves_future():
+    async def scenario():
+        c = Z21Client("192.0.2.10")
+
+        def responder(header, client):
+            # LAN_X_GET_LOCO_INFO goes out under 0x40; the Z21 answers with a
+            # LAN_X_LOCO_INFO (X-Header 0xEF, spec 4.4), also under 0x40.
+            if header == 0x40:
+                client._on_datagram(
+                    protocol.build_loco_info(
+                        3, forward=False, step=10, speed_steps=28
+                    )
+                )
+
+        t = RespondingTransport(c, responder)
+        c._attach_transport(t)
+        fut = c.request_loco_info(3)
+        result = await asyncio.wait_for(fut, timeout=0.5)
+        return t, result
+
+    t, info = run(scenario())
+    assert t.sent == [protocol.build_loco_info_get(3)]
+    assert isinstance(info, protocol.LocoInfo)
+    assert (info.address, info.forward, info.speed, info.speed_steps) == (
+        3,
+        False,
+        10,
+        28,
+    )
+
+
+def test_request_loco_info_without_transport_raises():
+    c = Z21Client("192.0.2.10")
+    with pytest.raises(RuntimeError):
+        c.request_loco_info(3)
+
+
+def test_loco_info_broadcast_reaches_subscriber():
+    c = Z21Client("192.0.2.10")
+    received: list[tuple[int, object]] = []
+    c.subscribe(lambda h, d: received.append((h, d)))
+
+    c._on_datagram(
+        protocol.build_loco_info(3, forward=True, step=42, speed_steps=128)
+    )
+
+    assert len(received) == 1
+    header, decoded = received[0]
+    assert header == protocol.HDR_LOCO_INFO
+    assert isinstance(decoded, protocol.LocoInfo)
+    assert decoded.speed == 42
+
+
 # --- Broadcast delivery -----------------------------------------------------
 
 

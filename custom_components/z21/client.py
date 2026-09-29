@@ -252,6 +252,43 @@ class Z21Client:
         self._transport_send(protocol.build_turnout_info_get(fadr))
         return fut
 
+    def set_loco_drive(
+        self,
+        address: int,
+        *,
+        step: int,
+        forward: bool,
+        speed_steps: int,
+        estop: bool = False,
+    ) -> None:
+        """Drive a loco (LAN_X_SET_LOCO_DRIVE, 4.2): coupled speed + direction.
+
+        Fire-once — unlike a turnout throw there is no paired follow-up; the Z21
+        keeps refreshing the loco's decoder on its own. Composing ``step`` /
+        ``forward`` from last-known state is the caller's job (ADR-0003).
+        """
+        self._transport_send(
+            protocol.build_loco_drive(
+                address,
+                step=step,
+                forward=forward,
+                speed_steps=speed_steps,
+                estop=estop,
+            )
+        )
+
+    def request_loco_info(self, address: int) -> asyncio.Future:
+        """Send LAN_X_GET_LOCO_INFO (4.1) and return a Future for the response.
+
+        Besides polling, this subscribes the client to future LAN_X_LOCO_INFO
+        changes for ``address`` (capped at 16 addresses, FIFO — spec 4.1).
+        """
+        loop = self._loop or asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._pending[protocol.HDR_LOCO_INFO] = fut
+        self._transport_send(protocol.build_loco_info_get(address))
+        return fut
+
     def logoff(self) -> None:
         """Send LAN_LOGOFF (2.2)."""
         self.send(protocol.HDR_LOGOFF)
