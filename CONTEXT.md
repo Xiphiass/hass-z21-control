@@ -65,7 +65,9 @@ VCCVoltage/track voltage (`voltage`, mV).
 
 Binary sensors (from Central State bitmasks): track voltage off (`power`,
 inverted), emergency stop / short circuit / over-temperature / power lost
-(`problem`), programming-mode-active (diagnostic, no class).
+(`problem`), programming-mode-active (diagnostic, no class). When locos are
+configured, the station also carries a **locos in motion** binary sensor
+(`moving`): on while any configured loco's reported speed is above 0.
 
 Deliberately skipped in v1: the granular short-circuit-location bits
 (`cseShortCircuitExternal`, `cseShortCircuitInternal`) and `cseRCN213` — the

@@ -7,6 +7,11 @@ semantics so HA shows *on = track powered*. The operational-fault flags
 ``problem`` with straight semantics (*on = fault*); programming-mode-active is a
 diagnostic sensor with no device_class. The entity list is description-driven, so
 adding a flag is a single tuple entry.
+
+When locos are configured, the station Device also carries a **Locos in motion**
+sensor (device_class ``moving``): on while at least one configured loco's last
+``LAN_X_LOCO_INFO`` (4.4) reports a speed step above 0. Like the loco entities it
+is non-optimistic and ``None`` until the first loco feedback arrives.
 """
 
 from __future__ import annotations
@@ -27,7 +32,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import protocol
-from .const import CONF_SERIAL, DOMAIN
+from .const import CONF_LOCO_ADDRESS, CONF_LOCOS, CONF_SERIAL, DOMAIN
 from .coordinator import Z21Coordinator
 
 
@@ -87,10 +92,13 @@ async def async_setup_entry(
 ) -> None:
     """Set up Z21 binary sensors from a config entry."""
     coordinator: Z21Coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
+    entities: list[BinarySensorEntity] = [
         Z21BinarySensor(coordinator, entry, description)
         for description in BINARY_SENSORS
-    )
+    ]
+    if entry.options.get(CONF_LOCOS):
+        entities.append(Z21LocosMovingBinarySensor(coordinator, entry))
+    async_add_entities(entities)
 
 
 class Z21BinarySensor(CoordinatorEntity[Z21Coordinator], BinarySensorEntity):
@@ -119,3 +127,33 @@ class Z21BinarySensor(CoordinatorEntity[Z21Coordinator], BinarySensorEntity):
         if self.coordinator.data is None:
             return None
         return self.entity_description.is_on_fn(self.coordinator.data)
+
+
+class Z21LocosMovingBinarySensor(CoordinatorEntity[Z21Coordinator], BinarySensorEntity):
+    """On while any configured loco reports a speed step above 0."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "locos_moving"
+    _attr_device_class = BinarySensorDeviceClass.MOVING
+
+    def __init__(self, coordinator: Z21Coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        serial = entry.data[CONF_SERIAL]
+        self._attr_unique_id = f"{serial}_locos_moving"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, str(serial))}
+        )
+        self._addresses = {
+            loco[CONF_LOCO_ADDRESS] for loco in entry.options.get(CONF_LOCOS, [])
+        }
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return whether any loco moves, or ``None`` before any loco feedback."""
+        states = self.coordinator.loco_states
+        speeds = [
+            states[address].speed for address in self._addresses if address in states
+        ]
+        if not speeds:
+            return None
+        return any(speed > 0 for speed in speeds)

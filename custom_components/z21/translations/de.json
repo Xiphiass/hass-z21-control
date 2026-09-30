@@ -142,6 +142,9 @@
       },
       "programming_mode": {
         "name": "Programmiermodus"
+      },
+      "locos_moving": {
+        "name": "Loks in Bewegung"
       }
     },
     "sensor": {
