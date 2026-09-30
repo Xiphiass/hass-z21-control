@@ -9,7 +9,8 @@ circuit. Fire-once, no retry or reconciliation. The entity list is
 description-driven, mirroring the sensor platforms.
 
 Configured turnouts and each configured loco's **direction** (on = forward,
-ADR-0003) are exposed here too.
+ADR-0003) are exposed here too, as are loco functions configured as a latching
+``switch``.
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import protocol
 from .client import Z21Client
 from .const import (
+    CONF_FUNCTION_TYPE,
+    CONF_LOCO_FUNCTIONS,
     CONF_LOCOS,
     CONF_SERIAL,
     CONF_TURNOUTS,
@@ -39,9 +42,10 @@ from .const import (
     CONF_TURNOUT_INVERTED,
     CONF_TURNOUT_NAME,
     DOMAIN,
+    FUNCTION_TYPE_SWITCH,
 )
 from .coordinator import Z21Coordinator
-from .entity import Z21LocoEntity
+from .entity import Z21LocoEntity, Z21LocoFunctionEntity
 
 
 @dataclass(kw_only=True)
@@ -74,7 +78,9 @@ async def async_setup_entry(
 ) -> None:
     """Set up Z21 switches from a config entry."""
     coordinator: Z21Coordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[Z21Switch | Z21TurnoutSwitch | Z21LocoDirection] = [
+    entities: list[
+        Z21Switch | Z21TurnoutSwitch | Z21LocoDirection | Z21LocoFunctionSwitch
+    ] = [
         Z21Switch(coordinator, entry, description) for description in SWITCHES
     ]
     # Add turnout switches from configured turnouts
@@ -91,6 +97,12 @@ async def async_setup_entry(
     entities.extend(
         Z21LocoDirection(coordinator, entry, loco)
         for loco in entry.options.get(CONF_LOCOS, [])
+    )
+    entities.extend(
+        Z21LocoFunctionSwitch(coordinator, entry, loco, function)
+        for loco in entry.options.get(CONF_LOCOS, [])
+        for function in loco.get(CONF_LOCO_FUNCTIONS, [])
+        if function[CONF_FUNCTION_TYPE] == FUNCTION_TYPE_SWITCH
     )
     async_add_entities(entities)
 
@@ -236,3 +248,24 @@ class Z21LocoDirection(Z21LocoEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Drive in reverse at the current speed; state follows feedback."""
         self.coordinator.drive_loco(self._address, forward=False)
+
+
+class Z21LocoFunctionSwitch(Z21LocoFunctionEntity, SwitchEntity):
+    """A latching loco function (e.g. lights) as a switch (non-optimistic).
+
+    ``is_on`` follows the function bit of the reported ``LAN_X_LOCO_INFO``, so
+    a function switched from a handset is reflected too.
+    """
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return the reported function state, or None before feedback."""
+        return self._function_on
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Switch the function on; state follows feedback."""
+        self.coordinator.client.set_loco_function(self._address, self._number, True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Switch the function off; state follows feedback."""
+        self.coordinator.client.set_loco_function(self._address, self._number, False)

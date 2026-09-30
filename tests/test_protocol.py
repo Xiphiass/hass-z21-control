@@ -741,6 +741,66 @@ def test_parse_datagram_surfaces_loco_info():
     assert info.speed == 5
 
 
+# --- Loco functions (§4.3.1, §4.4 DB4–DB8) ----------------------------------
+
+
+def test_build_loco_function_on_exact_bytes():
+    # addr 3, F1 on: DB3 = TT=01 | NNNNNN=1 = 0x41; XOR = E4^F8^00^03^41 = 0x5E.
+    assert protocol.build_loco_function(3, 1, on=True) == bytes.fromhex(
+        "0A 00 40 00 E4 F8 00 03 41 5E"
+    )
+
+
+def test_build_loco_function_off_exact_bytes():
+    # addr 3, F0 off: DB3 = 0x00; XOR = E4^F8^00^03 = 0x1F.
+    assert protocol.build_loco_function(3, 0, on=False) == bytes.fromhex(
+        "0A 00 40 00 E4 F8 00 03 00 1F"
+    )
+
+
+def test_build_loco_function_address_ge_128_and_f31():
+    frame = protocol.build_loco_function(300, 31, on=True)
+    assert frame[4:8] == bytes((0xE4, 0xF8, 0xC1, 0x2C))  # DB1 = 0xC0 | 0x01
+    assert frame[8] == 0x5F  # TT=01, NNNNNN=31
+
+
+def test_decode_loco_info_function_bits():
+    # DB4 = D(0x40, ignored) | L=F0 (0x10) | J=F1 (0x01); DB5 bit0 = F5;
+    # DB6 bit7 = F20; DB7 bit7 = F28; DB8 bit2 = F31.
+    payload = bytes((0x00, 0x03, 0x04, 0x80, 0x51, 0x01, 0x80, 0x80, 0x04))
+    info = _decode_loco_info(payload)
+    assert info is not None
+    expected = {0, 1, 5, 20, 28, 31}
+    assert {n for n in range(32) if info.functions >> n & 1} == expected
+
+
+def test_decode_loco_info_f1_to_f4_order():
+    # DB4 = 0DSLFGHJ: F=F4 (0x08), G=F3 (0x04), H=F2 (0x02), J=F1 (0x01).
+    for bit, function in ((0x01, 1), (0x02, 2), (0x04, 3), (0x08, 4)):
+        payload = bytes((0x00, 0x03, 0x04, 0x80, bit, 0, 0, 0))
+        assert _decode_loco_info(payload).functions == 1 << function
+
+
+def test_decode_loco_info_without_function_bytes_is_none():
+    assert _decode_loco_info(bytes((0x00, 0x03, 0x04, 0x82))).functions is None
+
+
+def test_decode_loco_info_pre_142_without_db8():
+    # FW < 1.42 sends DB4..DB7 only: F29–F31 read as off.
+    payload = bytes((0x00, 0x03, 0x04, 0x80, 0x10, 0, 0, 0xFF))
+    info = _decode_loco_info(payload)
+    assert info.functions == (1 << 0) | (0xFF << 21)
+
+
+def test_build_loco_info_functions_roundtrip_every_bit():
+    for n in range(32):
+        frame = build_loco_info(
+            3, forward=True, step=0, speed_steps=128, functions=1 << n
+        )
+        (info,) = parse_datagram(frame)
+        assert info.functions == 1 << n
+
+
 # --- Seam guard: no HA / socket / asyncio imports ---------------------------
 
 

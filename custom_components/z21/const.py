@@ -72,6 +72,20 @@ LOCO_SPEED_STEPS_DEFAULT = 128
 # silently evict the oldest, so the options flow refuses to configure more.
 LOCO_MAX = 16
 
+# Per-loco functions (options flow). Each is ``{id, name, number, type}``: the
+# function index F0–F31 and whether it is exposed as a latching ``switch`` or a
+# momentary ``button``. The id is stable across edits, like CONF_LOCO_ID.
+CONF_LOCO_FUNCTIONS = "functions"
+CONF_FUNCTION_ID = "id"
+CONF_FUNCTION_NAME = "name"
+CONF_FUNCTION_NUMBER = "number"
+CONF_FUNCTION_TYPE = "type"
+FUNCTION_TYPE_SWITCH = "switch"
+FUNCTION_TYPE_BUTTON = "button"
+FUNCTION_TYPES = (FUNCTION_TYPE_SWITCH, FUNCTION_TYPE_BUTTON)
+LOCO_FUNCTION_MIN = 0
+LOCO_FUNCTION_MAX = 31
+
 # Known LAN_GET_HWINFO HwType codes (Z21 LAN protocol spec 2.20). Unknown types
 # fall back to a hex string via ``hw_type_name``.
 HW_TYPE_NAMES: dict[int, str] = {

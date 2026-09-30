@@ -60,6 +60,12 @@ State** broadcast (`local_push`) and exposes it as:
 | Track power | `switch` | Turns track power on/off (on also clears an active emergency stop and programming mode). Reflects the live track-voltage state. |
 | Emergency stop | `button` | Halts all locomotives while leaving track voltage on. |
 | Turnout (per configured turnout) | `switch` | Throws a turnout between its two outputs. `on` drives output 2 and `off` output 1 by default (invertible per turnout). Reflects the last reported position. |
+| Loco function, type *switch* (per configured function) | `switch` | Latches a decoder function (F0–F31, e.g. lights) on/off. Reflects the function state the Z21 reports. |
+| Loco function, type *button* (per configured function) | `button` | Momentary: switches the function on and, after ~1 s, off again (e.g. horn, coupler). |
+
+Loco functions are configured per loco under **Configure → Manage locos →
+Manage loco functions**, each with a **name**, a **function number** (`0`–`31`,
+`0` = F0) and a **type** (switch or button).
 
 ### Turnouts
 

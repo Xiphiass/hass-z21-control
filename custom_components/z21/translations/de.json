@@ -77,6 +77,7 @@
         "menu_options": {
           "loco_add": "Lok hinzufügen",
           "loco_edit_select": "Lok bearbeiten",
+          "loco_functions_select": "Lokfunktionen verwalten",
           "loco_delete_select": "Lok löschen",
           "init": "Zurück"
         }
@@ -116,10 +117,62 @@
         "data": {
           "id": "Lok"
         }
+      },
+      "loco_functions_select": {
+        "title": "Lokfunktionen verwalten",
+        "data": {
+          "id": "Lok"
+        }
+      },
+      "loco_functions": {
+        "title": "Funktionen von {loco}",
+        "menu_options": {
+          "function_add": "Funktion hinzufügen",
+          "function_edit_select": "Funktion bearbeiten",
+          "function_delete_select": "Funktion löschen",
+          "manage_locos": "Zurück"
+        }
+      },
+      "function_add": {
+        "title": "Funktion zu {loco} hinzufügen",
+        "data": {
+          "name": "Name",
+          "number": "Funktionsnummer",
+          "type": "Typ"
+        },
+        "data_description": {
+          "number": "Die Decoder-Funktion, 0–31 (0 = F0, meist das Licht).",
+          "type": "Ein Schalter schaltet die Funktion dauerhaft ein/aus. Ein Taster schaltet sie kurz ein (z. B. Horn, Kupplung)."
+        }
+      },
+      "function_edit_select": {
+        "title": "Funktion bearbeiten",
+        "data": {
+          "id": "Funktion"
+        }
+      },
+      "function_edit": {
+        "title": "Funktion von {loco} bearbeiten",
+        "data": {
+          "name": "Name",
+          "number": "Funktionsnummer",
+          "type": "Typ"
+        },
+        "data_description": {
+          "number": "Die Decoder-Funktion, 0–31 (0 = F0, meist das Licht).",
+          "type": "Ein Schalter schaltet die Funktion dauerhaft ein/aus. Ein Taster schaltet sie kurz ein (z. B. Horn, Kupplung)."
+        }
+      },
+      "function_delete_select": {
+        "title": "Funktion löschen",
+        "data": {
+          "id": "Funktion"
+        }
       }
     },
     "error": {
       "duplicate_address": "Diese Adresse wird bereits von einem anderen Eintrag desselben Typs verwendet.",
+      "duplicate_function": "Diese Funktionsnummer ist für diese Lok bereits konfiguriert.",
       "too_many_locos": "Sie können höchstens 16 Loks konfigurieren (die Z21 begrenzt die Lok-Rückmeldung auf 16 Adressen)."
     }
   },
@@ -186,6 +239,14 @@
     "number": {
       "speed": {
         "name": "Geschwindigkeit"
+      }
+    }
+  },
+  "selector": {
+    "function_type": {
+      "options": {
+        "switch": "Schalter (ein/aus)",
+        "button": "Taster (kurz)"
       }
     }
   }

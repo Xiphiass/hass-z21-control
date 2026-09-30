@@ -33,6 +33,10 @@ DEFAULT_PORT = 21105
 # Module-level so tests can shrink it.
 TURNOUT_DEACTIVATE_DELAY = 0.15
 
+# How long a momentary (button) loco function is held on before the paired off.
+# Module-level so tests can shrink it.
+LOCO_FUNCTION_PULSE = 1.0
+
 _LOGGER = logging.getLogger(__name__)
 
 # A receive handler: called with the decoded dataset's header and the decoded
@@ -101,6 +105,8 @@ class Z21Client:
         # FAdr so a rapid re-throw of the same turnout replaces its pending
         # deactivate; different turnouts run independent timers (Q=1 allows it).
         self._turnout_timers: dict[int, asyncio.TimerHandle] = {}
+        # (address, function) -> scheduled off for an in-flight function pulse.
+        self._function_timers: dict[tuple[int, int], asyncio.TimerHandle] = {}
 
     # --- Lifecycle ----------------------------------------------------------
 
@@ -169,11 +175,14 @@ class Z21Client:
         """
         if self._transport is None:
             return
-        # Cancel any pending turnout deactivates so none fire into a torn-down
-        # transport after close.
+        # Cancel any pending turnout deactivates / function pulse-offs so none
+        # fire into a torn-down transport after close.
         for timer in self._turnout_timers.values():
             timer.cancel()
         self._turnout_timers.clear()
+        for timer in self._function_timers.values():
+            timer.cancel()
+        self._function_timers.clear()
         try:
             self.logoff()
         except Exception:  # pragma: no cover - defensive
@@ -285,6 +294,39 @@ class Z21Client:
                 estop=estop,
             )
         )
+
+    def set_loco_function(self, address: int, function: int, on: bool) -> None:
+        """Switch a loco function on or off (LAN_X_SET_LOCO_FUNCTION, 4.3.1).
+
+        A pending pulse-off for the same function is cancelled first, so an
+        explicit command is never overridden by a stale scheduled off.
+        """
+        pending = self._function_timers.pop((address, function), None)
+        if pending is not None:
+            pending.cancel()
+        self._transport_send(
+            protocol.build_loco_function(address, function, on=on)
+        )
+
+    def pulse_loco_function(self, address: int, function: int) -> None:
+        """Momentarily switch a loco function: on now, off after the pulse.
+
+        Mirrors :meth:`set_turnout`'s paired timing: the off is scheduled
+        :data:`LOCO_FUNCTION_PULSE` later, and a re-press restarts the pulse.
+        """
+        self.set_loco_function(address, function, True)
+        key = (address, function)
+        loop = self._loop or asyncio.get_running_loop()
+
+        def _off() -> None:
+            self._function_timers.pop(key, None)
+            if self._transport is None:
+                return
+            self._transport_send(
+                protocol.build_loco_function(address, function, on=False)
+            )
+
+        self._function_timers[key] = loop.call_later(LOCO_FUNCTION_PULSE, _off)
 
     def request_loco_info(self, address: int) -> asyncio.Future:
         """Send LAN_X_GET_LOCO_INFO (4.1) and return a Future for the response.

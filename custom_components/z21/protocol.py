@@ -251,6 +251,7 @@ def build_loco_info(
     speed_steps: int,
     estop: bool = False,
     busy: bool = False,
+    functions: int | None = None,
 ) -> bytes:
     """LAN_X_LOCO_INFO datagram as the Z21 sends it (4.4).
 
@@ -258,7 +259,8 @@ def build_loco_info(
     ``HDR_X`` with X-Header ``0xEF``. Provided so tests (and any round-trip)
     exercise the real wire format rather than a fabricated header. DB2 is
     ``0000BKKK`` (B = busy, KKK the speed-step code) and DB3 is ``RVVVVVVV``.
-    Function bits (DB4–DB8) are omitted — the decoder leaves them unparsed.
+    Function bits DB4–DB8 are appended only when ``functions`` (bit n = Fn) is
+    given; see :func:`_encode_function_bits`.
 
     Example — addr 3, DCC 128, forward, step 1::
 
@@ -269,7 +271,64 @@ def build_loco_info(
     adr_lsb = address & 0xFF
     db2 = (0x08 if busy else 0x00) | _STEPS_TO_INFO_KKK[speed_steps]
     db3 = (0x80 if forward else 0x00) | encode_speed(step, speed_steps, estop=estop)
-    return build_xbus(HDR_LOCO_INFO, bytes((adr_msb, adr_lsb, db2, db3)))
+    db = bytes((adr_msb, adr_lsb, db2, db3))
+    if functions is not None:
+        db += _encode_function_bits(functions)
+    return build_xbus(HDR_LOCO_INFO, db)
+
+
+# --- Loco functions (4.3.1, 4.4) ---------------------------------------------
+
+
+def _encode_function_bits(functions: int) -> bytes:
+    """Pack a function bitmask (bit n = Fn) into LAN_X_LOCO_INFO DB4–DB8 (4.4).
+
+    DB4 is ``0DSLFGHJ`` — L = F0, J/H/G/F = F1–F4 (D/S left clear); DB5, DB6,
+    DB7 carry F5–F12, F13–F20, F21–F28 with the lowest function in bit 0; DB8
+    carries F29–F31 in bits 0–2.
+    """
+    db4 = ((functions & 0x01) << 4) | ((functions >> 1) & 0x0F)
+    return bytes((
+        db4,
+        (functions >> 5) & 0xFF,
+        (functions >> 13) & 0xFF,
+        (functions >> 21) & 0xFF,
+        (functions >> 29) & 0x07,
+    ))
+
+
+def _decode_function_bits(db: bytes) -> int:
+    """Unpack LAN_X_LOCO_INFO DB4.. into a bitmask (bit n = Fn) — see above.
+
+    Tolerates a short tail: absent bytes (e.g. DB8 before FW 1.42) read as off.
+    """
+    db = db[:5].ljust(5, b"\x00")
+    functions = ((db[0] >> 4) & 0x01) | ((db[0] & 0x0F) << 1)
+    functions |= db[1] << 5
+    functions |= db[2] << 13
+    functions |= db[3] << 21
+    functions |= (db[4] & 0x07) << 29
+    return functions
+
+
+def build_loco_function(address: int, function: int, *, on: bool) -> bytes:
+    """LAN_X_SET_LOCO_FUNCTION (4.3.1): switch one loco function on or off.
+
+    X-Header ``0xE4``, DB0 ``0xF8``, the address packed as in
+    :func:`build_loco_drive` (``0xC0 | Adr_MSB`` for addresses ≥ 128), and DB3
+    ``TTNNNNNN`` where ``TT`` is the switch type (``00`` off, ``01`` on; the
+    ``10`` toggle is not used) and ``NNNNNN`` the function index (0 = F0).
+
+    Example — addr 3, F1 on::
+
+        0A 00 40 00 E4 F8 00 03 41 <xor>
+
+    """
+    adr_msb = (address >> 8) & 0x3F
+    adr_lsb = address & 0xFF
+    db1 = (0xC0 | adr_msb) if address >= 128 else adr_msb
+    db3 = (0x40 if on else 0x00) | (function & 0x3F)
+    return build_xbus(0xE4, bytes((0xF8, db1, adr_lsb, db3)))
 
 
 # --- Loco drive: speed coding + builders (4.1, 4.2) --------------------------
@@ -479,13 +538,14 @@ def _decode_turnout_info(payload: bytes) -> TurnoutInfo | None:
 
 @dataclass(frozen=True)
 class LocoInfo:
-    """Decoded LAN_X_LOCO_INFO response (4.4) — drive fields only.
+    """Decoded LAN_X_LOCO_INFO response (4.4).
 
     ``speed`` is the raw DCC step (0 = Stop); ``estop`` distinguishes an
     immediate emergency stop from a normal step-0 stop. ``speed_steps`` is the
     mode the Z21 reports (14 / 28 / 128) and ``busy`` is True when the loco is
-    being driven by another X-BUS handset. Function bits (DB4–DB8) are
-    intentionally left unparsed until loco functions ship.
+    being driven by another X-BUS handset. ``functions`` is the F0–F31 state
+    as a bitmask (bit n = Fn), or ``None`` when the datagram carried no
+    function bytes (DB4..).
     """
 
     address: int  # DCC loco address
@@ -494,15 +554,17 @@ class LocoInfo:
     estop: bool  # True = immediate emergency stop
     speed_steps: int  # reported mode: 14, 28, or 128
     busy: bool  # controlled by another handset
+    functions: int | None = None  # bit n = Fn on; None if not reported
 
 
 def _decode_loco_info(payload: bytes) -> LocoInfo | None:
-    """Decode a loco-info payload (DB0..DB3); ``None`` if too short.
+    """Decode a loco-info payload (DB0..DB3, optional DB4..DB8); ``None`` if short.
 
-    Reads only the drive fields: address (DB0/DB1, high bits of Adr_MSB ignored
+    Reads the drive fields: address (DB0/DB1, high bits of Adr_MSB ignored
     per 4.4), the busy bit and speed-step code from DB2 ``0000BKKK``, and
     direction/speed from DB3 ``RVVVVVVV`` via :func:`decode_speed`. An unknown
-    KKK defaults to 128-step decoding rather than raising.
+    KKK defaults to 128-step decoding rather than raising. Function bits are
+    decoded from DB4 onward when present.
     """
     if len(payload) < 4:  # need DB0..DB3
         return None
@@ -519,6 +581,7 @@ def _decode_loco_info(payload: bytes) -> LocoInfo | None:
         estop=estop,
         speed_steps=speed_steps,
         busy=busy,
+        functions=_decode_function_bits(payload[4:]) if len(payload) > 4 else None,
     )
 
 

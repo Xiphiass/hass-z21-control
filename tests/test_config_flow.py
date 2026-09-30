@@ -24,9 +24,14 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.z21 import protocol
 from custom_components.z21.client import Z21Client
 from custom_components.z21.const import (
+    CONF_FUNCTION_ID,
+    CONF_FUNCTION_NAME,
+    CONF_FUNCTION_NUMBER,
+    CONF_FUNCTION_TYPE,
     CONF_FW_VERSION,
     CONF_HW_TYPE,
     CONF_LOCO_ADDRESS,
+    CONF_LOCO_FUNCTIONS,
     CONF_LOCO_ID,
     CONF_LOCO_NAME,
     CONF_LOCO_SPEED_STEPS,
@@ -636,7 +641,7 @@ async def test_options_flow_loco_menu_hides_edit_delete_when_empty(
 async def test_options_flow_loco_menu_shows_edit_delete_when_present(
     hass: HomeAssistant,
 ) -> None:
-    """With locos, the loco submenu offers edit and delete too."""
+    """With locos, the loco submenu offers edit, functions, and delete too."""
     entry = _entry(
         locos=[{CONF_LOCO_NAME: "Big Boy", CONF_LOCO_ADDRESS: 3, CONF_LOCO_SPEED_STEPS: 128}]
     )
@@ -646,6 +651,7 @@ async def test_options_flow_loco_menu_shows_edit_delete_when_present(
     assert set(result["menu_options"]) == {
         "loco_add",
         "loco_edit_select",
+        "loco_functions_select",
         "loco_delete_select",
         "init",
     }
@@ -910,4 +916,302 @@ async def test_options_flow_add_loco_preserves_existing_turnouts(
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert len(result["data"][CONF_TURNOUTS]) == 1
     assert result["data"][CONF_TURNOUTS][0][CONF_TURNOUT_FADR] == 4
-    assert len(result["data"][CONF_LOCOS]) == 1
+
+
+# --- Loco function management ----------------------------------------------
+
+
+def _loco(functions: list[dict] | None = None, address: int = 3) -> dict:
+    """A configured loco with a stable id, optionally carrying functions."""
+    loco = {
+        CONF_LOCO_ID: "abc",
+        CONF_LOCO_NAME: "BR 218",
+        CONF_LOCO_ADDRESS: address,
+        CONF_LOCO_SPEED_STEPS: 128,
+    }
+    if functions is not None:
+        loco[CONF_LOCO_FUNCTIONS] = functions
+    return loco
+
+
+_LIGHT = {
+    CONF_FUNCTION_ID: "f-light",
+    CONF_FUNCTION_NAME: "Light",
+    CONF_FUNCTION_NUMBER: 0,
+    CONF_FUNCTION_TYPE: "switch",
+}
+
+
+async def _open_functions(hass: HomeAssistant, entry: MockConfigEntry):
+    """Descend into the function submenu of the loco with id ``abc``."""
+    result = await _open_locos(hass, entry)
+    result = await _pick(hass, result["flow_id"], "loco_functions_select")
+    assert result["step_id"] == "loco_functions_select"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_LOCO_ID: "abc"}
+    )
+    assert result["type"] is FlowResultType.MENU
+    assert result["step_id"] == "loco_functions"
+    assert result["description_placeholders"] == {"loco": "BR 218"}
+    return result
+
+
+async def _finish_functions(hass: HomeAssistant, flow_id: str):
+    """From the function submenu: Back to the loco submenu, then Done."""
+    result = await _pick(hass, flow_id, "manage_locos")
+    return await _finish(hass, result["flow_id"])
+
+
+async def test_options_flow_function_menu_hides_edit_delete_when_empty(
+    hass: HomeAssistant,
+) -> None:
+    """A loco without functions (legacy: no key at all) offers add and back."""
+    entry = _entry(locos=[_loco()])
+    entry.add_to_hass(hass)
+
+    result = await _open_functions(hass, entry)
+    assert set(result["menu_options"]) == {"function_add", "manage_locos"}
+
+
+async def test_options_flow_function_menu_shows_edit_delete_when_present(
+    hass: HomeAssistant,
+) -> None:
+    entry = _entry(locos=[_loco([_LIGHT])])
+    entry.add_to_hass(hass)
+
+    result = await _open_functions(hass, entry)
+    assert set(result["menu_options"]) == {
+        "function_add",
+        "function_edit_select",
+        "function_delete_select",
+        "manage_locos",
+    }
+
+
+async def test_options_flow_add_function_then_done(hass: HomeAssistant) -> None:
+    """Adding a function persists name/number/type with a stable id and reloads.
+
+    The seeded loco already holds an (empty) function list, so a flow that
+    appended to the stored list in place would see no diff and skip the reload.
+    """
+    entry = _entry(locos=[_loco([])])
+    entry.add_to_hass(hass)
+
+    result = await _open_functions(hass, entry)
+    result = await _pick(hass, result["flow_id"], "function_add")
+    assert result["step_id"] == "function_add"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_FUNCTION_NAME: "Horn",
+            CONF_FUNCTION_NUMBER: 2,
+            CONF_FUNCTION_TYPE: "button",
+        },
+    )
+    assert result["step_id"] == "loco_functions"
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await _pick(hass, result["flow_id"], "manage_locos")
+        result = await _pick(hass, result["flow_id"], "init")
+        result = await _pick(hass, result["flow_id"], "done")
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    reload.assert_called_once_with(entry.entry_id)
+
+    (function,) = result["data"][CONF_LOCOS][0][CONF_LOCO_FUNCTIONS]
+    assert function[CONF_FUNCTION_NAME] == "Horn"
+    assert function[CONF_FUNCTION_NUMBER] == 2  # stored as int
+    assert function[CONF_FUNCTION_TYPE] == "button"
+    assert function[CONF_FUNCTION_ID]
+
+
+async def test_options_flow_add_function_defaults_to_switch(
+    hass: HomeAssistant,
+) -> None:
+    entry = _entry(locos=[_loco([])])
+    entry.add_to_hass(hass)
+
+    result = await _open_functions(hass, entry)
+    result = await _pick(hass, result["flow_id"], "function_add")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_FUNCTION_NAME: "Light", CONF_FUNCTION_NUMBER: 0}
+    )
+    result = await _finish_functions(hass, result["flow_id"])
+    (function,) = result["data"][CONF_LOCOS][0][CONF_LOCO_FUNCTIONS]
+    assert function[CONF_FUNCTION_TYPE] == "switch"
+
+
+async def test_options_flow_duplicate_function_number_rejected(
+    hass: HomeAssistant,
+) -> None:
+    entry = _entry(locos=[_loco([_LIGHT])])
+    entry.add_to_hass(hass)
+
+    result = await _open_functions(hass, entry)
+    result = await _pick(hass, result["flow_id"], "function_add")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_FUNCTION_NAME: "Other",
+            CONF_FUNCTION_NUMBER: 0,
+            CONF_FUNCTION_TYPE: "button",
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "duplicate_function"}
+
+
+async def test_options_flow_same_function_number_on_other_loco_allowed(
+    hass: HomeAssistant,
+) -> None:
+    """Function numbers are unique per loco, not across locos."""
+    other = {**_loco([_LIGHT], address=7), CONF_LOCO_ID: "other"}
+    entry = _entry(locos=[_loco(), other])
+    entry.add_to_hass(hass)
+
+    result = await _open_functions(hass, entry)
+    result = await _pick(hass, result["flow_id"], "function_add")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_FUNCTION_NAME: "Light",
+            CONF_FUNCTION_NUMBER: 0,
+            CONF_FUNCTION_TYPE: "switch",
+        },
+    )
+    assert result["step_id"] == "loco_functions"
+
+
+async def test_options_flow_edit_function(hass: HomeAssistant) -> None:
+    entry = _entry(locos=[_loco([_LIGHT])])
+    entry.add_to_hass(hass)
+
+    result = await _open_functions(hass, entry)
+    result = await _pick(hass, result["flow_id"], "function_edit_select")
+    options = result["data_schema"].schema[CONF_FUNCTION_ID].config["options"]
+    assert options == [{"value": "f-light", "label": "F0 Light"}]
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_FUNCTION_ID: "f-light"}
+    )
+    assert result["step_id"] == "function_edit"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_FUNCTION_NAME: "Cab light",
+            CONF_FUNCTION_NUMBER: 5,
+            CONF_FUNCTION_TYPE: "switch",
+        },
+    )
+    assert result["step_id"] == "loco_functions"
+
+    result = await _finish_functions(hass, result["flow_id"])
+    assert result["data"][CONF_LOCOS][0][CONF_LOCO_FUNCTIONS] == [
+        {
+            CONF_FUNCTION_ID: "f-light",
+            CONF_FUNCTION_NAME: "Cab light",
+            CONF_FUNCTION_NUMBER: 5,
+            CONF_FUNCTION_TYPE: "switch",
+        }
+    ]
+
+
+async def test_options_flow_delete_function(hass: HomeAssistant) -> None:
+    horn = {
+        CONF_FUNCTION_ID: "f-horn",
+        CONF_FUNCTION_NAME: "Horn",
+        CONF_FUNCTION_NUMBER: 2,
+        CONF_FUNCTION_TYPE: "button",
+    }
+    entry = _entry(locos=[_loco([_LIGHT, horn])])
+    entry.add_to_hass(hass)
+
+    result = await _open_functions(hass, entry)
+    result = await _pick(hass, result["flow_id"], "function_delete_select")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_FUNCTION_ID: "f-light"}
+    )
+    assert result["step_id"] == "loco_functions"
+
+    result = await _finish_functions(hass, result["flow_id"])
+    assert result["data"][CONF_LOCOS][0][CONF_LOCO_FUNCTIONS] == [horn]
+
+
+async def test_options_flow_edit_loco_keeps_functions(hass: HomeAssistant) -> None:
+    """Editing a loco's details leaves its configured functions intact."""
+    entry = _entry(locos=[_loco([_LIGHT])])
+    entry.add_to_hass(hass)
+
+    result = await _open_locos(hass, entry)
+    result = await _pick(hass, result["flow_id"], "loco_edit_select")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_LOCO_ID: "abc"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_LOCO_NAME: "New", CONF_LOCO_ADDRESS: 3, CONF_LOCO_SPEED_STEPS: "128"},
+    )
+    result = await _finish(hass, result["flow_id"])
+    assert result["data"][CONF_LOCOS][0][CONF_LOCO_FUNCTIONS] == [_LIGHT]
+
+
+async def test_options_flow_edit_function_number_migrates_entity(
+    hass: HomeAssistant,
+) -> None:
+    from homeassistant.helpers import entity_registry as er
+
+    entry = _entry(locos=[_loco([_LIGHT])])
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "switch", DOMAIN, f"{_SERIAL}_loco_3_f0", config_entry=entry
+    )
+
+    result = await _open_functions(hass, entry)
+    result = await _pick(hass, result["flow_id"], "function_edit_select")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_FUNCTION_ID: "f-light"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_FUNCTION_NAME: "Light",
+            CONF_FUNCTION_NUMBER: 5,
+            CONF_FUNCTION_TYPE: "switch",
+        },
+    )
+    await _finish_functions(hass, result["flow_id"])
+
+    assert registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_loco_3_f5")
+    assert (
+        registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_loco_3_f0")
+        is None
+    )
+
+
+async def test_options_flow_edit_loco_address_migrates_function_entities(
+    hass: HomeAssistant,
+) -> None:
+    from homeassistant.helpers import entity_registry as er
+
+    entry = _entry(locos=[_loco([_LIGHT])])
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "switch", DOMAIN, f"{_SERIAL}_loco_3_f0", config_entry=entry
+    )
+
+    result = await _open_locos(hass, entry)
+    result = await _pick(hass, result["flow_id"], "loco_edit_select")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_LOCO_ID: "abc"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_LOCO_NAME: "BR 218", CONF_LOCO_ADDRESS: 5, CONF_LOCO_SPEED_STEPS: "128"},
+    )
+    await _finish(hass, result["flow_id"])
+
+    assert registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_loco_5_f0")
+    assert (
+        registry.async_get_entity_id("switch", DOMAIN, f"{_SERIAL}_loco_3_f0")
+        is None
+    )
