@@ -448,3 +448,79 @@ async def test_only_stale_loco_devices_are_removable(
         hass, entry, devices[f"{_SERIAL}_loco_loco-br218"]
     )
     assert await async_remove_config_entry_device(hass, entry, stale)
+
+
+# --- Locos in motion (station-level) ----------------------------------------
+
+
+def _moving_entity_id(hass: HomeAssistant) -> str | None:
+    return er.async_get(hass).async_get_entity_id(
+        "binary_sensor", DOMAIN, f"{_SERIAL}_locos_moving"
+    )
+
+
+async def test_locos_moving_sits_on_the_station_device(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """The aggregate sensor is a ``moving`` binary sensor on the Z21 Device."""
+    await _setup(hass, monkeypatch)
+
+    entity_id = _moving_entity_id(hass)
+    assert entity_id is not None
+    entry_id = hass.config_entries.async_entries(DOMAIN)[0].entry_id
+    station = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, str(_SERIAL)), entry_id
+    )
+    assert er.async_get(hass).async_get(entity_id).device_id == station.id
+    state = hass.states.get(entity_id)
+    assert state.attributes.get("device_class") == "moving"
+    # No loco feedback yet -> unknown.
+    assert state.state == "unknown"
+
+
+async def test_locos_moving_follows_any_loco_speed(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """On while at least one loco reports speed > 0; off once all stand still."""
+    transport = await _setup(hass, monkeypatch)
+    entity_id = _moving_entity_id(hass)
+
+    await _feed(hass, transport, address=3, forward=True, step=0, speed_steps=128)
+    assert hass.states.get(entity_id).state == "off"
+
+    await _feed(hass, transport, address=300, forward=False, step=10, speed_steps=28)
+    assert hass.states.get(entity_id).state == "on"
+
+    await _feed(hass, transport, address=3, forward=True, step=50, speed_steps=128)
+    await _feed(hass, transport, address=300, forward=False, step=0, speed_steps=28)
+    assert hass.states.get(entity_id).state == "on"
+
+    await _feed(
+        hass, transport, address=3, forward=True, step=0, speed_steps=128, estop=True
+    )
+    assert hass.states.get(entity_id).state == "off"
+
+
+async def test_locos_moving_ignores_unconfigured_addresses(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """Feedback for an address that is not a configured loco doesn't count."""
+    transport = await _setup(hass, monkeypatch)
+    entity_id = _moving_entity_id(hass)
+
+    await _feed(hass, transport, address=3, forward=True, step=0, speed_steps=128)
+    await _feed(hass, transport, address=42, forward=True, step=20, speed_steps=128)
+    assert hass.states.get(entity_id).state == "off"
+
+
+async def test_locos_moving_absent_without_locos(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """With no locos configured the aggregate sensor is not created."""
+    _install_client(monkeypatch)
+    entry = _mock_entry(locos=[])
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert _moving_entity_id(hass) is None

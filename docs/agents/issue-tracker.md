@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and PRDs for this repo live as GitHub issues on siemens.ghe.com. Use the `gh` CLI for all operations.
+Issues and PRDs for this repo live as GitHub issues on github.com (`Xiphiass/hass-z21-control`). Use the `gh` CLI for all operations.
 
 ## Conventions
 

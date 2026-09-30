@@ -142,6 +142,9 @@
       },
       "programming_mode": {
         "name": "Programming mode"
+      },
+      "locos_moving": {
+        "name": "Locos in motion"
       }
     },
     "sensor": {

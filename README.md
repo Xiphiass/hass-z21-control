@@ -51,6 +51,7 @@ State** broadcast (`local_push`) and exposes it as:
 | Over temperature | The command station is over temperature. |
 | Power lost | The command station lost power. |
 | Programming mode | The command station is in programming mode. |
+| Locos in motion | At least one configured loco reports a speed above 0 (only present when locos are configured). |
 
 **Controls** (central-controller commands)
 
