@@ -77,6 +77,7 @@
         "menu_options": {
           "loco_add": "Add a loco",
           "loco_edit_select": "Edit a loco",
+          "loco_functions_select": "Manage loco functions",
           "loco_delete_select": "Delete a loco",
           "init": "Back"
         }
@@ -116,10 +117,62 @@
         "data": {
           "id": "Loco"
         }
+      },
+      "loco_functions_select": {
+        "title": "Manage loco functions",
+        "data": {
+          "id": "Loco"
+        }
+      },
+      "loco_functions": {
+        "title": "Functions of {loco}",
+        "menu_options": {
+          "function_add": "Add a function",
+          "function_edit_select": "Edit a function",
+          "function_delete_select": "Delete a function",
+          "manage_locos": "Back"
+        }
+      },
+      "function_add": {
+        "title": "Add function to {loco}",
+        "data": {
+          "name": "Name",
+          "number": "Function number",
+          "type": "Type"
+        },
+        "data_description": {
+          "number": "The decoder function, 0–31 (0 = F0, usually the lights).",
+          "type": "A switch latches the function on/off. A button switches it on briefly (e.g. horn, coupler)."
+        }
+      },
+      "function_edit_select": {
+        "title": "Edit a function",
+        "data": {
+          "id": "Function"
+        }
+      },
+      "function_edit": {
+        "title": "Edit function of {loco}",
+        "data": {
+          "name": "Name",
+          "number": "Function number",
+          "type": "Type"
+        },
+        "data_description": {
+          "number": "The decoder function, 0–31 (0 = F0, usually the lights).",
+          "type": "A switch latches the function on/off. A button switches it on briefly (e.g. horn, coupler)."
+        }
+      },
+      "function_delete_select": {
+        "title": "Delete a function",
+        "data": {
+          "id": "Function"
+        }
       }
     },
     "error": {
       "duplicate_address": "That address is already in use by another entry of the same type.",
+      "duplicate_function": "That function number is already configured for this loco.",
       "too_many_locos": "You can configure at most 16 locos (the Z21 caps loco feedback at 16 addresses)."
     }
   },
@@ -186,6 +239,14 @@
     "number": {
       "speed": {
         "name": "Speed"
+      }
+    }
+  },
+  "selector": {
+    "function_type": {
+      "options": {
+        "switch": "Switch (on/off)",
+        "button": "Button (momentary)"
       }
     }
   }

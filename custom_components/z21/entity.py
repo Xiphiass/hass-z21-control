@@ -5,10 +5,11 @@ Each configured loco is its own HA **Device**, nested under the Z21 station via
 ``button`` (CONTEXT.md "Loco entities"). The Device is keyed by the loco's stable
 ``id`` rather than its DCC address, so an address edit in the options flow keeps
 the same Device; the entity unique_ids are address-based
-(``{serial}_loco_{address}_{suffix}``) and migrated by the options flow. Leaving
-room for function entities later means they only need to subclass this.
+(``{serial}_loco_{address}_{suffix}``) and migrated by the options flow.
+Configured loco functions subclass :class:`Z21LocoFunctionEntity`, keyed
+``{serial}_loco_{address}_f{number}`` and named by the user.
 
-All three entities are **non-optimistic**: state derives from the coordinator's
+All entities are **non-optimistic**: state derives from the coordinator's
 last-known ``LocoInfo`` for the address (``None`` until the first feedback), so
 external control from a handset or another app is reflected in HA.
 """
@@ -21,6 +22,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import protocol
 from .const import (
+    CONF_FUNCTION_NAME,
+    CONF_FUNCTION_NUMBER,
     CONF_LOCO_ADDRESS,
     CONF_LOCO_ID,
     CONF_LOCO_NAME,
@@ -72,3 +75,28 @@ class Z21LocoEntity(CoordinatorEntity[Z21Coordinator]):
     def _info(self) -> protocol.LocoInfo | None:
         """The loco's last reported ``LAN_X_LOCO_INFO``, or ``None`` if none yet."""
         return self.coordinator.loco_states.get(self._address)
+
+
+class Z21LocoFunctionEntity(Z21LocoEntity):
+    """A user-configured loco function (F0–F31) on the loco's Device."""
+
+    _attr_icon = "mdi:function-variant"
+
+    def __init__(
+        self,
+        coordinator: Z21Coordinator,
+        entry: ConfigEntry,
+        loco: dict,
+        function: dict,
+    ) -> None:
+        self._number: int = function[CONF_FUNCTION_NUMBER]
+        super().__init__(coordinator, entry, loco, f"f{self._number}")
+        self._attr_name = function[CONF_FUNCTION_NAME]
+
+    @property
+    def _function_on(self) -> bool | None:
+        """The reported state of this function, or ``None`` if not reported."""
+        info = self._info
+        if info is None or info.functions is None:
+            return None
+        return bool(info.functions >> self._number & 1)

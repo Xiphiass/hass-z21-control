@@ -35,9 +35,14 @@ from homeassistant.util.uuid import random_uuid_hex
 
 from .client import Z21Client, Z21Timeout
 from .const import (
+    CONF_FUNCTION_ID,
+    CONF_FUNCTION_NAME,
+    CONF_FUNCTION_NUMBER,
+    CONF_FUNCTION_TYPE,
     CONF_FW_VERSION,
     CONF_HW_TYPE,
     CONF_LOCO_ADDRESS,
+    CONF_LOCO_FUNCTIONS,
     CONF_LOCO_ID,
     CONF_LOCO_NAME,
     CONF_LOCO_SPEED_STEPS,
@@ -49,8 +54,12 @@ from .const import (
     CONF_TURNOUT_NAME,
     CONF_TURNOUTS,
     DOMAIN,
+    FUNCTION_TYPE_SWITCH,
+    FUNCTION_TYPES,
     LOCO_ADDRESS_MAX,
     LOCO_ADDRESS_MIN,
+    LOCO_FUNCTION_MAX,
+    LOCO_FUNCTION_MIN,
     LOCO_MAX,
     LOCO_SPEED_STEPS,
     LOCO_SPEED_STEPS_DEFAULT,
@@ -110,6 +119,32 @@ _LOCO_FORM_SCHEMA = vol.Schema(
             SelectSelectorConfig(
                 options=[str(s) for s in LOCO_SPEED_STEPS],
                 mode=SelectSelectorMode.DROPDOWN,
+            )
+        ),
+    }
+)
+
+# Add/edit form for a loco function: a friendly name, the function number
+# (F0–F31), and whether it is a latching switch or a momentary button. Number
+# uniqueness within the loco is checked in the handler (``duplicate_function``).
+_FUNCTION_FORM_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_FUNCTION_NAME): TextSelector(),
+        vol.Required(CONF_FUNCTION_NUMBER): NumberSelector(
+            NumberSelectorConfig(
+                min=LOCO_FUNCTION_MIN,
+                max=LOCO_FUNCTION_MAX,
+                step=1,
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Required(
+            CONF_FUNCTION_TYPE, default=FUNCTION_TYPE_SWITCH
+        ): SelectSelector(
+            SelectSelectorConfig(
+                options=list(FUNCTION_TYPES),
+                mode=SelectSelectorMode.DROPDOWN,
+                translation_key="function_type",
             )
         ),
     }
@@ -193,8 +228,11 @@ class Z21OptionsFlow(OptionsFlowWithReload):
         # Lazily populated on first access from the live entry options.
         self._turnouts: list[dict] | None = None
         self._locos: list[dict] | None = None
-        # id of the item currently being edited (set by *_edit_select).
+        # id of the item currently being edited (set by *_edit_select), and of
+        # the loco whose functions are being managed.
         self._selected_id: str | None = None
+        # id of the loco function currently being edited.
+        self._selected_function_id: str | None = None
 
     @property
     def _turnout_working(self) -> list[dict]:
@@ -215,11 +253,24 @@ class Z21OptionsFlow(OptionsFlowWithReload):
         """The in-memory working copy of the loco list.
 
         Loaded once from ``entry.options`` and backfilled with a stable ``id``
-        for any loco that predates it; persisted only on ``Done``.
+        for any loco (or loco function) that predates it; persisted only on
+        ``Done``. Function lists are copied too, so edits never mutate the
+        stored options the ``Done`` diff compares against.
         """
         if self._locos is None:
             self._locos = [
-                {**l, CONF_LOCO_ID: l.get(CONF_LOCO_ID) or random_uuid_hex()}
+                {
+                    **l,
+                    CONF_LOCO_ID: l.get(CONF_LOCO_ID) or random_uuid_hex(),
+                    CONF_LOCO_FUNCTIONS: [
+                        {
+                            **f,
+                            CONF_FUNCTION_ID: f.get(CONF_FUNCTION_ID)
+                            or random_uuid_hex(),
+                        }
+                        for f in l.get(CONF_LOCO_FUNCTIONS, [])
+                    ],
+                }
                 for l in self.config_entry.options.get(CONF_LOCOS, [])
             ]
         return self._locos
@@ -347,10 +398,14 @@ class Z21OptionsFlow(OptionsFlowWithReload):
     async def async_step_manage_locos(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Show the loco submenu: add, edit/delete (if any), and back."""
+        """Show the loco submenu: add, edit/functions/delete (if any), and back."""
         menu_options = ["loco_add"]
         if self._loco_working:
-            menu_options += ["loco_edit_select", "loco_delete_select"]
+            menu_options += [
+                "loco_edit_select",
+                "loco_functions_select",
+                "loco_delete_select",
+            ]
         menu_options.append("init")
         return self.async_show_menu(
             step_id="manage_locos", menu_options=menu_options
@@ -369,6 +424,7 @@ class Z21OptionsFlow(OptionsFlowWithReload):
                     CONF_LOCO_NAME: user_input[CONF_LOCO_NAME],
                     CONF_LOCO_ADDRESS: int(user_input[CONF_LOCO_ADDRESS]),
                     CONF_LOCO_SPEED_STEPS: int(user_input[CONF_LOCO_SPEED_STEPS]),
+                    CONF_LOCO_FUNCTIONS: [],
                 })
                 return await self.async_step_manage_locos()
             errors["base"] = error
@@ -445,6 +501,141 @@ class Z21OptionsFlow(OptionsFlowWithReload):
             data_schema=self._loco_select_schema(),
         )
 
+    # --- Loco function management ------------------------------------------
+
+    async def async_step_loco_functions_select(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Pick which loco's functions to manage."""
+        if not self._loco_working:
+            return await self.async_step_manage_locos()
+        if user_input is not None:
+            self._selected_id = user_input[CONF_LOCO_ID]
+            return await self.async_step_loco_functions()
+        return self.async_show_form(
+            step_id="loco_functions_select",
+            data_schema=self._loco_select_schema(),
+        )
+
+    async def async_step_loco_functions(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Show the selected loco's function submenu: add, edit/delete, back."""
+        loco = self._find(self._loco_working, self._selected_id)
+        if loco is None:
+            return await self.async_step_manage_locos()
+        menu_options = ["function_add"]
+        if loco[CONF_LOCO_FUNCTIONS]:
+            menu_options += ["function_edit_select", "function_delete_select"]
+        menu_options.append("manage_locos")
+        return self.async_show_menu(
+            step_id="loco_functions",
+            menu_options=menu_options,
+            description_placeholders={"loco": loco[CONF_LOCO_NAME]},
+        )
+
+    async def async_step_function_add(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Add a function to the selected loco, then return to its submenu."""
+        loco = self._find(self._loco_working, self._selected_id)
+        if loco is None:
+            return await self.async_step_manage_locos()
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            error = self._validate_function_unique(
+                loco, user_input[CONF_FUNCTION_NUMBER]
+            )
+            if error is None:
+                loco[CONF_LOCO_FUNCTIONS].append({
+                    CONF_FUNCTION_ID: random_uuid_hex(),
+                    **self._function_fields(user_input),
+                })
+                return await self.async_step_loco_functions()
+            errors["base"] = error
+
+        return self.async_show_form(
+            step_id="function_add",
+            data_schema=_FUNCTION_FORM_SCHEMA,
+            errors=errors,
+            description_placeholders={"loco": loco[CONF_LOCO_NAME]},
+        )
+
+    async def async_step_function_edit_select(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Pick which function of the selected loco to edit."""
+        loco = self._find(self._loco_working, self._selected_id)
+        if loco is None or not loco[CONF_LOCO_FUNCTIONS]:
+            return await self.async_step_loco_functions()
+        if user_input is not None:
+            self._selected_function_id = user_input[CONF_FUNCTION_ID]
+            return await self.async_step_function_edit()
+        return self.async_show_form(
+            step_id="function_edit_select",
+            data_schema=self._function_select_schema(loco),
+        )
+
+    async def async_step_function_edit(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Edit the selected function, then return to the loco's submenu."""
+        loco = self._find(self._loco_working, self._selected_id)
+        function = (
+            None
+            if loco is None
+            else self._find(loco[CONF_LOCO_FUNCTIONS], self._selected_function_id)
+        )
+        if function is None:
+            return await self.async_step_loco_functions()
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            error = self._validate_function_unique(
+                loco,
+                user_input[CONF_FUNCTION_NUMBER],
+                exclude_id=self._selected_function_id,
+            )
+            if error is None:
+                function.update(self._function_fields(user_input))
+                return await self.async_step_loco_functions()
+            errors["base"] = error
+
+        return self.async_show_form(
+            step_id="function_edit",
+            data_schema=self.add_suggested_values_to_schema(
+                _FUNCTION_FORM_SCHEMA,
+                {
+                    CONF_FUNCTION_NAME: function[CONF_FUNCTION_NAME],
+                    CONF_FUNCTION_NUMBER: function[CONF_FUNCTION_NUMBER],
+                    CONF_FUNCTION_TYPE: function[CONF_FUNCTION_TYPE],
+                },
+            ),
+            errors=errors,
+            description_placeholders={"loco": loco[CONF_LOCO_NAME]},
+        )
+
+    async def async_step_function_delete_select(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Pick a function to delete, remove it, then return to the submenu."""
+        loco = self._find(self._loco_working, self._selected_id)
+        if loco is None or not loco[CONF_LOCO_FUNCTIONS]:
+            return await self.async_step_loco_functions()
+        if user_input is not None:
+            selected = user_input[CONF_FUNCTION_ID]
+            loco[CONF_LOCO_FUNCTIONS] = [
+                f
+                for f in loco[CONF_LOCO_FUNCTIONS]
+                if f[CONF_FUNCTION_ID] != selected
+            ]
+            return await self.async_step_loco_functions()
+        return self.async_show_form(
+            step_id="function_delete_select",
+            data_schema=self._function_select_schema(loco),
+        )
+
     # --- Done --------------------------------------------------------------
 
     async def async_step_done(
@@ -489,13 +680,21 @@ class Z21OptionsFlow(OptionsFlowWithReload):
         ]
 
     @staticmethod
-    def _loco_content(locos: list[dict]) -> list[tuple[str, int, int]]:
+    def _loco_content(locos: list[dict]) -> list[tuple]:
         """The user-meaningful shape of a loco list, ignoring internal ids."""
         return [
             (
                 l[CONF_LOCO_NAME],
                 int(l[CONF_LOCO_ADDRESS]),
                 int(l[CONF_LOCO_SPEED_STEPS]),
+                [
+                    (
+                        f[CONF_FUNCTION_NAME],
+                        int(f[CONF_FUNCTION_NUMBER]),
+                        f[CONF_FUNCTION_TYPE],
+                    )
+                    for f in l.get(CONF_LOCO_FUNCTIONS, [])
+                ],
             )
             for l in locos
         ]
@@ -541,6 +740,28 @@ class Z21OptionsFlow(OptionsFlowWithReload):
             return "too_many_locos"
         return self._validate_loco_unique(address)
 
+    @staticmethod
+    def _validate_function_unique(
+        loco: dict, number: int | float, *, exclude_id: str | None = None
+    ) -> str | None:
+        """Return an error key if ``number`` collides with another function."""
+        number = int(number)
+        for f in loco[CONF_LOCO_FUNCTIONS]:
+            if f[CONF_FUNCTION_ID] == exclude_id:
+                continue
+            if f[CONF_FUNCTION_NUMBER] == number:
+                return "duplicate_function"
+        return None
+
+    @staticmethod
+    def _function_fields(user_input: dict[str, Any]) -> dict[str, Any]:
+        """The stored fields of a function from its add/edit form input."""
+        return {
+            CONF_FUNCTION_NAME: user_input[CONF_FUNCTION_NAME],
+            CONF_FUNCTION_NUMBER: int(user_input[CONF_FUNCTION_NUMBER]),
+            CONF_FUNCTION_TYPE: user_input[CONF_FUNCTION_TYPE],
+        }
+
     def _turnout_select_schema(self) -> vol.Schema:
         """A one-field schema: a dropdown of turnouts labelled by name."""
         options = [
@@ -575,6 +796,24 @@ class Z21OptionsFlow(OptionsFlowWithReload):
             )
         })
 
+    @staticmethod
+    def _function_select_schema(loco: dict) -> vol.Schema:
+        """A one-field schema: a dropdown of a loco's functions."""
+        options = [
+            {
+                "value": f[CONF_FUNCTION_ID],
+                "label": f"F{f[CONF_FUNCTION_NUMBER]} {f[CONF_FUNCTION_NAME]}",
+            }
+            for f in loco[CONF_LOCO_FUNCTIONS]
+        ]
+        return vol.Schema({
+            vol.Required(CONF_FUNCTION_ID): SelectSelector(
+                SelectSelectorConfig(
+                    options=options, mode=SelectSelectorMode.DROPDOWN
+                )
+            )
+        })
+
     def _migrate_edited_turnouts(self) -> None:
         """Carry each turnout's switch entity across an FAdr change.
 
@@ -602,13 +841,16 @@ class Z21OptionsFlow(OptionsFlowWithReload):
         self._apply_migrations(moves)
 
     def _migrate_edited_locos(self) -> None:
-        """Carry each loco's entities across a DCC-address change.
+        """Carry each loco's entities across a DCC-address or function change.
 
-        A loco owns three entities keyed by ``{serial}_loco_{address}_{suffix}``
-        (``number`` speed, ``switch`` direction, ``button`` e-stop). When a loco
-        keeps its stable id but changes address, rename each existing registry
-        entry so history/area/customisations survive instead of orphaning as
-        unavailable.
+        A loco owns three drive entities keyed by
+        ``{serial}_loco_{address}_{suffix}`` (``number`` speed, ``switch``
+        direction, ``button`` e-stop) plus one entity per function keyed
+        ``{serial}_loco_{address}_f{number}`` on its type's platform. When a loco
+        keeps its stable id but changes address — or a function keeps its id but
+        changes number — rename each existing registry entry so
+        history/area/customisations survive instead of orphaning as unavailable.
+        A function whose type changed moves platform and cannot be carried over.
         """
         original = {
             l[CONF_LOCO_ID]: l
@@ -616,7 +858,7 @@ class Z21OptionsFlow(OptionsFlowWithReload):
             if CONF_LOCO_ID in l
         }
         serial = self.config_entry.data[CONF_SERIAL]
-        # (platform, unique_id suffix) for each per-loco entity.
+        # (platform, unique_id suffix) for each per-loco drive entity.
         entities = (
             ("number", "speed"),
             ("switch", "direction"),
@@ -626,14 +868,30 @@ class Z21OptionsFlow(OptionsFlowWithReload):
         moves: list[tuple[str, str, str]] = []
         for l in self._loco_working:
             old = original.get(l[CONF_LOCO_ID])
-            if old is None or old[CONF_LOCO_ADDRESS] == l[CONF_LOCO_ADDRESS]:
+            if old is None:
                 continue
-            for platform, suffix in entities:
-                moves.append((
-                    platform,
-                    f"{serial}_loco_{old[CONF_LOCO_ADDRESS]}_{suffix}",
-                    f"{serial}_loco_{l[CONF_LOCO_ADDRESS]}_{suffix}",
-                ))
+            old_prefix = f"{serial}_loco_{old[CONF_LOCO_ADDRESS]}"
+            new_prefix = f"{serial}_loco_{l[CONF_LOCO_ADDRESS]}"
+            if old_prefix != new_prefix:
+                for platform, suffix in entities:
+                    moves.append((
+                        platform,
+                        f"{old_prefix}_{suffix}",
+                        f"{new_prefix}_{suffix}",
+                    ))
+            old_functions = {
+                f[CONF_FUNCTION_ID]: f
+                for f in old.get(CONF_LOCO_FUNCTIONS, [])
+                if CONF_FUNCTION_ID in f
+            }
+            for f in l[CONF_LOCO_FUNCTIONS]:
+                old_f = old_functions.get(f[CONF_FUNCTION_ID])
+                if old_f is None or old_f[CONF_FUNCTION_TYPE] != f[CONF_FUNCTION_TYPE]:
+                    continue
+                old_uid = f"{old_prefix}_f{old_f[CONF_FUNCTION_NUMBER]}"
+                new_uid = f"{new_prefix}_f{f[CONF_FUNCTION_NUMBER]}"
+                if old_uid != new_uid:
+                    moves.append((f[CONF_FUNCTION_TYPE], old_uid, new_uid))
         self._apply_migrations(moves)
 
     def _apply_migrations(self, moves: list[tuple[str, str, str]]) -> None:

@@ -133,8 +133,8 @@ no turnout inventory to discover, so turnouts are added by hand through the
 User-configured locomotives addressed by **DCC loco address** (1–10239 usable).
 The Z21 has no loco roster to discover, so locos are added by hand through the
 **options flow**, alongside turnouts (add/edit/delete). Each loco is a HA
-**Device** — a container for its drive entities today and its function entities
-later. Per-loco config is `{id, name, address, speed_steps}`, with a stable `id`
+**Device** — a container for its drive and function entities. Per-loco config
+is `{id, name, address, speed_steps, functions}`, with a stable `id`
 independent of the address (so an address edit migrates the entities), and
 `speed_steps` one of **14 / 28 / 128** (default 128), because the drive command
 requires it and the Z21 stores it per address. **DCC only** — the integration
@@ -162,8 +162,20 @@ never sends `LAN_SET_LOCOMODE`.
 
 Each configured loco is one HA **Device** carrying three entities: a speed
 **`number`** (0..step-max), a direction **`switch`** (on = forward), and an
-emergency-stop **`button`** (per-loco E-Stop). Function buttons (F0–F31) are
-deliberately deferred to a follow-up slice.
+emergency-stop **`button`** (per-loco E-Stop), plus one entity per configured
+**loco function**.
+
+### Loco functions
+
+Decoder functions **F0–F31** (F0 = usually the lights), configured by hand per
+loco as `{id, name, number, type}` — the number unique within the loco, the `id`
+stable so an edit migrates the entity. Sent with `LAN_X_SET_LOCO_FUNCTION`
+(4.3.1, on/off). The **type** picks the entity:
+
+- **switch** — latching on/off, **non-optimistic**: state follows the function
+  bits of `LAN_X_LOCO_INFO` (4.4, DB4–DB8), so handset changes are reflected.
+- **button** — **momentary**: a press switches the function on, then off after
+  a short fixed pulse (horn, coupler). Stateless.
 
 ## Scope (v1)
 
@@ -173,9 +185,10 @@ central-controller controls (a track-power switch and an emergency-stop button;
 see "Central controller controls" above), exposes user-configured turnouts
 as switch entities (see "Turnouts" above), and exposes user-configured locos as
 drive entities — a speed number, a direction switch, and an E-Stop button per
-loco (see "Locos" above). Finer-grained control — loco **functions** (F0–F31),
-CV programming — stays out of scope for this slice, though the design leaves room
-for it later (see ADR-0001, the symmetric I/O seam, and ADR-0003).
+loco — plus user-configured loco **functions** (F0–F31) as switches or
+momentary buttons (see "Locos" above). CV programming stays out of scope, though
+the design leaves room for it later (see ADR-0001, the symmetric I/O seam, and
+ADR-0003).
 
 Fixed behaviours (not user-configurable in v1): keepalive interval **30s**,
 staleness window **2.5× keepalive (~75s)**, UDP port **21105**. Turnouts are

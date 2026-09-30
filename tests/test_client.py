@@ -374,6 +374,82 @@ def test_set_loco_drive_without_transport_raises():
         c.set_loco_drive(3, step=0, forward=True, speed_steps=128)
 
 
+# --- Loco functions (4.3.1) -------------------------------------------------
+
+
+def test_set_loco_function_sends_once():
+    c = Z21Client("192.0.2.10")
+    t = FakeTransport()
+    c._attach_transport(t)
+    c.set_loco_function(3, 0, True)
+    c.set_loco_function(3, 0, False)
+    assert t.sent == [
+        protocol.build_loco_function(3, 0, on=True),
+        protocol.build_loco_function(3, 0, on=False),
+    ]
+
+
+def test_pulse_loco_function_sends_on_then_off(monkeypatch):
+    monkeypatch.setattr(client_mod, "LOCO_FUNCTION_PULSE", 0.01)
+
+    async def scenario():
+        c = Z21Client("192.0.2.10")
+        t = FakeTransport()
+        c._attach_transport(t)
+        c.pulse_loco_function(3, 2)
+        assert t.sent == [protocol.build_loco_function(3, 2, on=True)]
+        await asyncio.sleep(0.05)
+        return t
+
+    t = run(scenario())
+    assert t.sent == [
+        protocol.build_loco_function(3, 2, on=True),
+        protocol.build_loco_function(3, 2, on=False),
+    ]
+
+
+def test_pulse_re_press_restarts_pulse(monkeypatch):
+    monkeypatch.setattr(client_mod, "LOCO_FUNCTION_PULSE", 0.05)
+
+    async def scenario():
+        c = Z21Client("192.0.2.10")
+        t = FakeTransport()
+        c._attach_transport(t)
+        c.pulse_loco_function(3, 2)
+        await asyncio.sleep(0.03)
+        c.pulse_loco_function(3, 2)
+        await asyncio.sleep(0.03)
+        # The first pulse's off must not fire mid-way through the second.
+        assert protocol.build_loco_function(3, 2, on=False) not in t.sent
+        await asyncio.sleep(0.05)
+        return t
+
+    t = run(scenario())
+    assert t.sent.count(protocol.build_loco_function(3, 2, on=False)) == 1
+
+
+def test_close_cancels_pending_function_pulse(monkeypatch):
+    monkeypatch.setattr(client_mod, "LOCO_FUNCTION_PULSE", 0.02)
+
+    async def scenario():
+        c = Z21Client("192.0.2.10")
+        t = FakeTransport()
+        c._attach_transport(t)
+        c.pulse_loco_function(3, 2)
+        await c.close()
+        await asyncio.sleep(0.05)
+        return t
+
+    t = run(scenario())
+    assert protocol.build_loco_function(3, 2, on=False) not in t.sent
+
+
+def test_set_loco_function_without_transport_raises():
+    c = Z21Client("192.0.2.10")
+    with pytest.raises(RuntimeError):
+        c.set_loco_function(3, 0, True)
+
+
 def test_request_loco_info_sends_request_and_resolves_future():
     async def scenario():
         c = Z21Client("192.0.2.10")

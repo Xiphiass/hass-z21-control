@@ -13,6 +13,10 @@ Each configured loco also gets its own **E-Stop** button (ADR-0003): an immediat
 per-loco stop sent as ``LAN_X_SET_LOCO_DRIVE`` (4.2) with the E-Stop code
 ``R0000001``, preserving the last-known direction — distinct from the
 station-wide ``LAN_X_SET_STOP`` above.
+
+Loco functions configured as a ``button`` are **momentary**: a press switches
+the function on and the client switches it off again after a short pulse
+(e.g. a horn or a coupler).
 """
 
 from __future__ import annotations
@@ -28,9 +32,16 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import Z21Client
-from .const import CONF_LOCOS, CONF_SERIAL, DOMAIN
+from .const import (
+    CONF_FUNCTION_TYPE,
+    CONF_LOCO_FUNCTIONS,
+    CONF_LOCOS,
+    CONF_SERIAL,
+    DOMAIN,
+    FUNCTION_TYPE_BUTTON,
+)
 from .coordinator import Z21Coordinator
-from .entity import Z21LocoEntity
+from .entity import Z21LocoEntity, Z21LocoFunctionEntity
 
 
 @dataclass(kw_only=True)
@@ -60,12 +71,18 @@ async def async_setup_entry(
 ) -> None:
     """Set up Z21 buttons from a config entry."""
     coordinator: Z21Coordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[Z21Button | Z21LocoEStop] = [
+    entities: list[Z21Button | Z21LocoEStop | Z21LocoFunctionButton] = [
         Z21Button(coordinator, entry, description) for description in BUTTONS
     ]
     entities.extend(
         Z21LocoEStop(coordinator, entry, loco)
         for loco in entry.options.get(CONF_LOCOS, [])
+    )
+    entities.extend(
+        Z21LocoFunctionButton(coordinator, entry, loco, function)
+        for loco in entry.options.get(CONF_LOCOS, [])
+        for function in loco.get(CONF_LOCO_FUNCTIONS, [])
+        if function[CONF_FUNCTION_TYPE] == FUNCTION_TYPE_BUTTON
     )
     async_add_entities(entities)
 
@@ -111,3 +128,11 @@ class Z21LocoEStop(Z21LocoEntity, ButtonEntity):
     async def async_press(self) -> None:
         """Send the per-loco E-Stop; feedback comes via ``LAN_X_LOCO_INFO``."""
         self.coordinator.drive_loco(self._address, speed=0, estop=True)
+
+
+class Z21LocoFunctionButton(Z21LocoFunctionEntity, ButtonEntity):
+    """A momentary loco function (e.g. horn): on, then off after a pulse."""
+
+    async def async_press(self) -> None:
+        """Pulse the function; the client owns the paired off."""
+        self.coordinator.client.pulse_loco_function(self._address, self._number)
