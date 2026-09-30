@@ -203,22 +203,25 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         has arrived (ADR-0003). Always sends; state is **not** updated
         optimistically — it follows the Z21's subscription feedback.
 
-        A last-known speed is a raw step in the mode the Z21 *reported*; it is
-        rescaled into the loco's *configured* mode before encoding, so a
-        direction flip or E-Stop keeps the actual speed when the two modes
-        differ (ADR-0003). The step is then clamped to the configured maximum
-        so it can never be encoded as an invalid code.
+        The command is sent in the step mode the Z21 *last reported* for this
+        address, not the configured one. ``LAN_X_SET_LOCO_DRIVE`` (4.2) stores
+        its ``S`` nibble as that address's mode, so driving in the configured
+        mode (the slider's) rewrites a handset's 14/28-step loco into 128 and
+        the decoder ignores the new speed. Direction and E-Stop still moved the
+        loco because they re-encoded the speed the Z21 already had. An explicit
+        ``speed`` is a raw step in the *configured* mode (the slider's range)
+        and is rescaled into the reported mode; an omitted one is already in
+        the reported mode. Before any feedback the configured mode is used.
+        The step is clamped to the mode actually sent so it can never be
+        encoded as an invalid code.
         """
         last = self._loco_states.get(address)
-        speed_steps = self._loco_speed_steps(address)
+        configured = self._loco_speed_steps(address)
+        speed_steps = last.speed_steps if last is not None else configured
         if speed is None:
-            speed = (
-                protocol.rescale_speed_step(
-                    last.speed, last.speed_steps, speed_steps
-                )
-                if last is not None
-                else 0
-            )
+            speed = last.speed if last is not None else 0
+        elif last is not None and last.speed_steps != configured:
+            speed = protocol.rescale_speed_step(speed, configured, speed_steps)
         if forward is None:
             forward = last.forward if last is not None else True
         self.client.set_loco_drive(
