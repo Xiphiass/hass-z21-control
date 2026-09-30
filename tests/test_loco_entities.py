@@ -377,10 +377,14 @@ async def test_estop_is_not_the_station_wide_stop(
     ]
 
 
-async def test_direction_flip_rescales_mismatched_speed(
+async def test_direction_flip_keeps_reported_step_mode(
     hass: HomeAssistant, monkeypatch
 ) -> None:
-    """A step reported in another mode is re-sent rescaled, not raw (ADR-0003)."""
+    """A direction flip is sent in the mode the Z21 reported, not the configured one.
+
+    Rewriting a 128-reported loco into its configured 14-step mode would store
+    that mode for the address (§4.2) and change its speed (ADR-0003).
+    """
     transport = await _setup(hass, monkeypatch)
     # Köf is configured for 14 steps, but the Z21 reports it in 128-step mode.
     await _feed(hass, transport, address=7, forward=True, step=100, speed_steps=128)
@@ -391,7 +395,28 @@ async def test_direction_flip_rescales_mismatched_speed(
         "switch", "turn_off", {"entity_id": entity_id}, blocking=True
     )
 
-    assert transport.sent == [_drive(7, step=11, forward=False, speed_steps=14)]
+    assert transport.sent == [_drive(7, step=100, forward=False, speed_steps=128)]
+
+
+async def test_set_speed_rescales_into_reported_mode(
+    hass: HomeAssistant, monkeypatch
+) -> None:
+    """A slider step is rescaled into the mode the Z21 reports, then sent in it.
+
+    Köf's slider is 0..14, but the station reports 128. Step 7/14 must go out
+    as 63/126 in 128-step mode — sending it as 14 would store that mode (§4.2)
+    and the decoder would ignore the speed change.
+    """
+    transport = await _setup(hass, monkeypatch)
+    await _feed(hass, transport, address=7, forward=True, step=100, speed_steps=128)
+    entity_id = _entity_id(hass, "number", 7, "speed")
+    transport.sent.clear()
+
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": entity_id, "value": 7}, blocking=True
+    )
+
+    assert transport.sent == [_drive(7, step=63, forward=True, speed_steps=128)]
 
 
 # --- Device removal ---------------------------------------------------------

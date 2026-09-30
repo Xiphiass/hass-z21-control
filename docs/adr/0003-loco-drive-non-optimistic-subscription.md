@@ -63,10 +63,16 @@ it carries two protocol constraints that shape the code in surprising ways:
 - A configured step mode that disagrees with the mode the Z21 reports in
   feedback can yield a reported step above the slider max; the entity clamps and
   logs rather than raising.
-- On the send side, a composed command (direction flip or E-Stop with speed
-  omitted) **rescales** the last-known step from the reported mode into the
-  configured mode before encoding. The step keeps its position in the drivable
-  range, rounded, and never rounds a moving loco down to Stop. The command is
-  always sent in the configured mode, never the reported one, because the
-  configured mode records what the decoder supports. Re-encoding the raw step
-  without rescaling would turn a flip at 100/128 into 3/28 (#55).
+- On the send side, every drive command is sent in the step mode the Z21
+  **last reported** for that address (`LAN_X_LOCO_INFO` DB2), not the configured
+  one. §4.2 stores the command's `S` nibble as that address's mode, so a
+  speed change in the configured mode (the slider's, default 128) rewrites a
+  handset's 14/28-step loco into 128 and the decoder ignores the new speed —
+  direction and E-Stop still worked, because they re-encoded the speed the Z21
+  already had. An explicit slider speed is a raw step in the configured mode
+  and is **rescaled** into the reported mode before encoding; an omitted speed
+  (direction flip, E-Stop) is already in the reported mode and is sent as-is.
+  The rescale keeps the step's position in the drivable range, rounded, and
+  never rounds a moving loco down to Stop. Before any feedback the configured
+  mode is used. The configured mode remains the slider's range and the record
+  of what the decoder supports; it is no longer forced onto the wire (#55).

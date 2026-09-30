@@ -4,10 +4,12 @@ Each configured loco gets a speed ``number`` in **raw DCC steps** — 0..14,
 0..28 or 0..126 for its configured 14 / 28 / 128 step mode — so the
 ``LAN_X_LOCO_INFO`` echo round-trips without rounding (CONTEXT.md "Locos").
 Setting a value sends ``LAN_X_SET_LOCO_DRIVE`` (4.2) composed with the loco's
-last-known direction; 0 is a normal **Stop**, never the E-Stop (that is the
-loco's ``button``). Per ADR-0003 the entity is **non-optimistic**: its value
-follows the Z21's feedback, and a reported step above the slider max (a
-configured step mode disagreeing with the Z21's) is clamped and logged.
+last-known direction, in the step mode the Z21 last reported — the slider value
+is rescaled into that mode so the command does not rewrite the address's stored
+mode (ADR-0003). 0 is a normal **Stop**, never the E-Stop (that is the loco's
+``button``). Per ADR-0003 the entity is **non-optimistic**: its value follows
+the Z21's feedback, and a reported step above the slider max (a configured step
+mode disagreeing with the Z21's) is clamped and logged.
 """
 
 from __future__ import annotations
