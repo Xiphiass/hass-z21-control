@@ -1,3 +1,16 @@
+<p align="center">
+  <img src="custom_components/z21/brand/icon@2x.png" alt="Z21 icon" width="128">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Xiphiass/hass-z21-control/releases"><img src="https://img.shields.io/github/v/release/Xiphiass/hass-z21-control" alt="Release"></a>
+  <a href="https://github.com/Xiphiass/hass-z21-control/actions/workflows/tests.yml"><img src="https://github.com/Xiphiass/hass-z21-control/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
+  <a href="https://github.com/Xiphiass/hass-z21-control/actions/workflows/hassfest.yml"><img src="https://github.com/Xiphiass/hass-z21-control/actions/workflows/hassfest.yml/badge.svg" alt="hassfest"></a>
+  <a href="https://hacs.xyz/docs/faq/custom_repositories/"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5.svg" alt="HACS Custom"></a>
+  <img src="https://img.shields.io/badge/Home%20Assistant-2026.8%2B-18BCF2?logo=homeassistant&logoColor=white" alt="Home Assistant 2026.8+">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Xiphiass/hass-z21-control" alt="License: MIT"></a>
+</p>
+
 # hass-z21-control
 
 A [Home Assistant](https://www.home-assistant.io/) custom integration for
@@ -179,3 +192,7 @@ socket — so the full suite is fast and hermetic.
 
 The codec implements the Z21 LAN protocol specification (v1.13); docstrings cite
 its section numbers.
+
+## License
+
+[MIT](LICENSE)
