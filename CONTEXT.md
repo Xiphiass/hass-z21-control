@@ -44,6 +44,10 @@ one that delivers `LAN_SYSTEMSTATE_DATACHANGED`. (Note: flag `0x00000001` is the
 A periodic `LAN_SYSTEMSTATE_GETDATA` request the integration sends on a fixed
 interval. Serves two purposes: refreshes System State, and acts as a liveness
 probe so a silently-dropped broadcast subscription is detected and recovered.
+Each keepalive also re-sends the broadcast flags and re-polls every configured
+loco: the Z21 drops a client's subscriptions whenever it forgets the client
+(reboot, or eviction after a minute of silence) yet keeps answering the poll,
+and a single lost loco-info datagram would otherwise freeze a loco's state.
 
 ## Liveness / Availability
 

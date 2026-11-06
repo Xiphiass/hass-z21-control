@@ -285,7 +285,7 @@ async def test_silence_past_window_marks_unavailable(
 async def test_recovery_resends_broadcast_flags(
     hass: HomeAssistant, monkeypatch
 ) -> None:
-    """The first datagram after silence re-sends broadcast flags and recovers."""
+    """Broadcast flags are re-sent on every keepalive, including the recovery one."""
     responder = _responder(answer_state=True)
     transports = _install_client(monkeypatch, responder=responder)
     entry = _mock_entry()
@@ -303,8 +303,8 @@ async def test_recovery_resends_broadcast_flags(
                 | protocol.BROADCAST_FLAG_DRIVING_SWITCHING,
             ),
         )
-    # One broadcast-flags send at setup.
-    assert transports[0].sent.count(broadcast) == 1
+    # Sent at setup and again by the first-refresh keepalive.
+    assert transports[0].sent.count(broadcast) == 2
 
     # Fall past the window into unavailable.
     responder.answer_state = False
@@ -313,10 +313,11 @@ async def test_recovery_resends_broadcast_flags(
     await hass.async_block_till_done()
     assert hass.states.get(entity_id).state == "unavailable"
 
-    # Z21 comes back: next poll reply recovers and re-sends the flags.
+    # Z21 comes back: the poll re-sends the flags and its reply recovers.
+    before = transports[0].sent.count(broadcast)
     responder.answer_state = True
     await _coordinator(hass).async_refresh()
     await hass.async_block_till_done()
 
     assert hass.states.get(entity_id).state != "unavailable"
-    assert transports[0].sent.count(broadcast) == 2
+    assert transports[0].sent.count(broadcast) > before
