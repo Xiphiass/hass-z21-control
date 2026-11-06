@@ -14,7 +14,9 @@ the Z21's push model into a Home Assistant ``DataUpdateCoordinator``:
   via ``async_set_updated_data``.
 - The 30 s poll (``LAN_SYSTEMSTATE_GETDATA``, spec 2.19) doubles as a keepalive
   and a staleness detector: its reply *is* a ``LAN_SYSTEMSTATE_DATACHANGED``, so
-  it shares the receive path.
+  it shares the receive path. Each poll also re-sends the broadcast flags and
+  re-polls every configured loco, so subscriptions the Z21 silently dropped and
+  lost ``LAN_X_LOCO_INFO`` datagrams heal within one keepalive.
 
 Liveness is tracked by the time of the last received datagram (push *or* poll
 reply), not by any single poll's success. A missed poll is tolerated while a
@@ -117,13 +119,17 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
             raise ConfigEntryNotReady(
                 f"Z21 handshake failed: {err}"
             ) from err
+        self._set_broadcastflags()
+        self._unsub = self.client.subscribe(self._handle_message)
+        self._discover_turnouts()
+        self._discover_locos()
+
+    def _set_broadcastflags(self) -> None:
+        """Send LAN_SET_BROADCASTFLAGS (2.16): System State + driving/switching."""
         self.client.set_broadcastflags(
             protocol.BROADCAST_FLAG_SYSTEM_STATE
             | protocol.BROADCAST_FLAG_DRIVING_SWITCHING
         )
-        self._unsub = self.client.subscribe(self._handle_message)
-        self._discover_turnouts()
-        self._discover_locos()
 
     def _discover_turnouts(self) -> None:
         """Poll the position of every configured turnout (LAN_X_GET_TURNOUT_INFO).
@@ -154,10 +160,7 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         ):
             self._last_rx = self.hass.loop.time()
             if self._stale:
-                self.client.set_broadcastflags(
-                    protocol.BROADCAST_FLAG_SYSTEM_STATE
-                    | protocol.BROADCAST_FLAG_DRIVING_SWITCHING
-                )
+                self._set_broadcastflags()
                 self._discover_turnouts()
                 self._discover_locos()
                 self._stale = False
@@ -253,11 +256,24 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         self.client.request_turnout_info(fadr)
 
     async def _async_update_data(self) -> protocol.SystemState:
-        """Poll for System State, awaiting the pushed reply within the window."""
+        """Poll for System State, awaiting the pushed reply within the window.
+
+        Every keepalive also re-asserts the per-client subscriptions: the
+        broadcast flags (2.16) and a ``LAN_X_GET_LOCO_INFO`` (4.1) per configured
+        loco. The Z21 drops both whenever it forgets the client — a reboot, or
+        the spec 1.1 eviction after a minute without communication — yet still
+        answers ``LAN_SYSTEMSTATE_GETDATA``, so a gap shorter than the staleness
+        window never reaches the stale-recovery path and loco feedback would
+        silently stop. The loco poll also reconciles a lost ``LAN_X_LOCO_INFO``
+        datagram (UDP has no delivery guarantee), which would otherwise leave a
+        stopped loco reported as moving. Both are idempotent on the Z21.
+        """
         loop = self.hass.loop
         waiter: asyncio.Future[protocol.SystemState] = loop.create_future()
         self._waiter = waiter
         try:
+            self._set_broadcastflags()
+            self._discover_locos()
             self.client.request_systemstate()
             return await asyncio.wait_for(waiter, _STATE_TIMEOUT)
         except (asyncio.TimeoutError, TimeoutError) as err:
