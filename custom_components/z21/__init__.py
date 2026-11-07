@@ -10,8 +10,8 @@ entities (each loco its own Device) send on the same I/O seam.
 from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.const import CONF_HOST, EVENT_HOMEASSISTANT_STOP, Platform
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
 from .client import Z21Client
@@ -65,6 +65,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # open socket while HA waits to retry.
         await coordinator.async_shutdown_client()
         raise
+
+    async def _async_logoff_on_stop(_event: Event) -> None:
+        # HA does not unload config entries on shutdown, so without this the
+        # socket dies silently and the Z21 keeps the old client (same IP, old
+        # port) registered. Spec 1.1 asks clients to log off; a restarted
+        # integration then starts from a clean client list.
+        await coordinator.async_shutdown_client()
+
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_logoff_on_stop)
+    )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

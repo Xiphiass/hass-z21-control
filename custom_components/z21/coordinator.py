@@ -150,8 +150,14 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         Replies and later changes arrive as ``LAN_X_LOCO_INFO`` and update
         :attr:`loco_states` via :meth:`_handle_message`.
         """
-        for loco in self.config_entry.options.get(CONF_LOCOS, []):
-            self.client.request_loco_info(loco[CONF_LOCO_ADDRESS])
+        addresses = [
+            loco[CONF_LOCO_ADDRESS]
+            for loco in self.config_entry.options.get(CONF_LOCOS, [])
+        ]
+        if addresses:
+            _LOGGER.debug("Polling/subscribing locos %s", addresses)
+        for address in addresses:
+            self.client.request_loco_info(address)
 
     def _handle_message(self, header: int, decoded: object) -> None:
         """Route a decoded dataset to System State, turnout positions, or loco state."""
@@ -177,6 +183,7 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         elif header == protocol.HDR_LOCO_INFO and isinstance(
             decoded, protocol.LocoInfo
         ):
+            _LOGGER.debug("Loco info received: %s", decoded)
             self._loco_states[decoded.address] = decoded
             self.async_update_listeners()
 

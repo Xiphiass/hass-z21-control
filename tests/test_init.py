@@ -231,6 +231,29 @@ async def test_unload_closes_client(hass: HomeAssistant, monkeypatch) -> None:
     assert protocol.build_frame(protocol.HDR_LOGOFF) in transports[0].sent
 
 
+async def test_ha_stop_logs_off_from_z21(hass: HomeAssistant, monkeypatch) -> None:
+    """Stopping Home Assistant sends LAN_LOGOFF and closes the socket.
+
+    HA does not unload config entries on shutdown, so without this the Z21
+    keeps the old client (same IP, old port) registered across a restart and
+    the restarted integration's loco feedback is lost (spec 1.1, 2.2).
+    """
+    transports = _install_client(
+        monkeypatch, responder=_responder(answer_state=True)
+    )
+    entry = _mock_entry()
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert protocol.build_frame(protocol.HDR_LOGOFF) not in transports[0].sent
+
+    await hass.async_stop()
+
+    assert transports[0].closed
+    assert protocol.build_frame(protocol.HDR_LOGOFF) in transports[0].sent
+
+
 def _coordinator(hass: HomeAssistant):
     """The single loaded coordinator, for driving polls via async_refresh."""
     return next(iter(hass.data[DOMAIN].values()))

@@ -86,7 +86,9 @@ config-entry `unique_id` (survives IP changes, blocks duplicates). No
 auto-discovery in v1 (Z21 has no mDNS/SSDP; UDP-broadcast probe deferred).
 
 Logon to the Z21 is **implicit** on the first command sent. On HA teardown the
-integration sends `LAN_LOGOFF` (`0x30`) for a clean disconnect.
+integration sends `LAN_LOGOFF` (`0x30`) for a clean disconnect — both on
+unload and on Home Assistant shutdown, since HA does not unload config entries
+when it stops and the Z21 would otherwise keep the old client across a restart.
 
 ## Domain
 
