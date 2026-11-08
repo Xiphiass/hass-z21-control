@@ -48,6 +48,12 @@ Each keepalive also re-sends the broadcast flags and re-polls every configured
 loco: the Z21 drops a client's subscriptions whenever it forgets the client
 (reboot, or eviction after a minute of silence) yet keeps answering the poll,
 and a single lost loco-info datagram would otherwise freeze a loco's state.
+The interval runs from the last keepalive, not the last datagram: the Z21 pushes
+System State every few seconds, and those pushes must not postpone it.
+
+Turnout and loco polls are sent **one at a time**, each awaiting its reply (or a
+short timeout) before the next: the Z21 silently drops a `LAN_X` request sent
+while it is still answering the previous one.
 
 ## Liveness / Availability
 

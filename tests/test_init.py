@@ -118,6 +118,7 @@ def _install_client(monkeypatch, *, responder) -> list[_FakeTransport]:
     # on its first attempt; only the System State wait needs shrinking. Shrink
     # the staleness window too so the liveness tests can sleep past it (issue #8).
     monkeypatch.setattr("custom_components.z21.coordinator._STATE_TIMEOUT", 0.2)
+    monkeypatch.setattr("custom_components.z21.coordinator.POLL_REPLY_TIMEOUT", 0.05)
     monkeypatch.setattr("custom_components.z21.coordinator.STALENESS_WINDOW", 0.5)
     return transports
 

@@ -7,6 +7,7 @@ messages.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,7 +27,17 @@ def mock_client():
     client = MagicMock()
     client.set_broadcastflags.return_value = None
     client.connect = AsyncMock()
+    # Polls return the client's reply future; resolve it as a live Z21 would.
+    client.request_turnout_info.side_effect = _answered
+    client.request_loco_info.side_effect = _answered
     return client
+
+
+def _answered(*_args):
+    """A reply future that is already resolved, as from a responsive Z21."""
+    fut = asyncio.get_running_loop().create_future()
+    fut.set_result(None)
+    return fut
 
 
 def _make_coordinator(mock_client, turnouts=None):
@@ -86,7 +97,11 @@ def test_coordinator_repolls_turnouts_on_stale_recovery(mock_client):
         power_lost=False,
         capabilities_valid=False,
     )
-    coordinator._handle_message(HDR_SYSTEMSTATE_DATACHANGED, system_state)
+    async def recover():
+        coordinator._handle_message(HDR_SYSTEMSTATE_DATACHANGED, system_state)
+        await coordinator._discovery_task
+
+    asyncio.run(recover())
 
     fadrs = [c.args[0] for c in mock_client.request_turnout_info.call_args_list]
     assert fadrs == [4, 7]
@@ -354,7 +369,11 @@ def test_coordinator_stale_recovery_sends_combined_flags(mock_client):
             capabilities_valid=False,
         )
 
-        coordinator._handle_message(HDR_SYSTEMSTATE_DATACHANGED, system_state)
+        async def recover():
+            coordinator._handle_message(HDR_SYSTEMSTATE_DATACHANGED, system_state)
+            await coordinator._discovery_task
+
+        asyncio.run(recover())
 
         # Verify combined flags were sent during stale recovery
         assert mock_client.set_broadcastflags.call_count == 1
