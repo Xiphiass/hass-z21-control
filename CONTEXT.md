@@ -11,9 +11,10 @@ UDP port 21105. The integration is a **client** of exactly one Z21.
 
 ## Z21 LAN protocol
 
-The binary UDP request/response + broadcast protocol documented in
-`z21-lan-protocol.md`. Every datagram is `DataLen (LE16) | Header (LE16) |
-Data`. Multiple datasets may be packed in one UDP packet.
+The binary UDP request/response + broadcast protocol, specified in the Z21 LAN
+protocol specification v1.13 (`z21-lan-protokoll-en.pdf` at the repo root).
+Every datagram is `DataLen (LE16) | Header (LE16) | Data`. Multiple datasets
+may be packed in one UDP packet.
 
 ## System State
 
@@ -35,9 +36,10 @@ System State snapshot. Avoid using "central state" loosely for the snapshot.
 
 A per-client (per IP+port) set of flags set via `LAN_SET_BROADCASTFLAGS` that
 tells the Z21 which asynchronous broadcasts to push. Flags reset on every new
-logon and must be re-sent after reconnect. v1 uses flag **`0x00000100`** — the
-one that delivers `LAN_SYSTEMSTATE_DATACHANGED`. (Note: flag `0x00000001` is the
-*driving & switching* group, NOT system state — a common mix-up.)
+logon and must be re-sent after reconnect. The integration sets two flags:
+**`0x00000100`** (System State, delivers `LAN_SYSTEMSTATE_DATACHANGED`) and
+**`0x00000001`** (the *driving & switching* group, delivers turnout and loco
+feedback). Note that `0x00000001` is NOT system state — a common mix-up.
 
 ## Keepalive
 
@@ -65,9 +67,11 @@ stale data. On the first datagram after a silence, the integration re-sends
 `LAN_SET_BROADCASTFLAGS` (flags reset on logoff/reconnect) before trusting the
 push stream again.
 
-## Entity surface (v1)
+## Station entities
 
-All entities belong to one HA **Device** representing the Z21.
+The station-wide entities belong to one HA **Device** representing the Z21.
+Each configured loco is its own Device, linked to the station (see "Loco
+entities").
 
 Sensors (electrical telemetry): MainCurrent, FilteredMainCurrent, ProgCurrent
 (device_class `current`, mA); Temperature (`temperature`, °C); SupplyVoltage,
@@ -79,7 +83,7 @@ inverted), emergency stop / short circuit / over-temperature / power lost
 configured, the station also carries a **locos in motion** binary sensor
 (`moving`): on while any configured loco's reported speed is above 0.
 
-Deliberately skipped in v1: the granular short-circuit-location bits
+Deliberately not exposed: the granular short-circuit-location bits
 (`cseShortCircuitExternal`, `cseShortCircuitInternal`) and `cseRCN213` — the
 general short-circuit bit covers the automatable case.
 
@@ -89,7 +93,7 @@ The config flow takes the **host IP only** (port fixed at 21105). It validates
 by round-tripping `LAN_GET_SERIAL_NUMBER` within a short timeout — a wrong IP
 fails fast rather than creating a dead entry. The 32-bit serial becomes the
 config-entry `unique_id` (survives IP changes, blocks duplicates). No
-auto-discovery in v1 (Z21 has no mDNS/SSDP; UDP-broadcast probe deferred).
+auto-discovery (Z21 has no mDNS/SSDP; UDP-broadcast probe deferred).
 
 Logon to the Z21 is **implicit** on the first command sent. On HA teardown the
 integration sends `LAN_LOGOFF` (`0x30`) for a clean disconnect — both on
@@ -111,9 +115,8 @@ default HACS store. Default-store inclusion is explicitly out of scope for now.
 
 ## Central controller controls
 
-Station-wide power/stop commands — the first **control** surface, distinct from
-per-loco/CV control (still out of scope). Turnout control ships separately (see
-"Turnouts" below). Three Z21 LAN commands, all on the shared `0x40` X-bus header:
+Station-wide power/stop commands, distinct from per-loco control (see "Locos")
+and turnouts (see "Turnouts"). Three Z21 LAN commands, all on the shared `0x40` X-bus header:
 
 - **Track power** — `LAN_X_SET_TRACK_POWER_ON` (2.6) / `LAN_X_SET_TRACK_POWER_OFF`
   (2.5). Modeled as one HA **`switch`** (on = power on, off = power off).
@@ -189,19 +192,16 @@ stable so an edit migrates the entity. Sent with `LAN_X_SET_LOCO_FUNCTION`
 - **button** — **momentary**: a press switches the function on, then off after
   a short fixed pulse (horn, coupler). Stateless.
 
-## Scope (v1)
+## Scope
 
-v1 **monitors and controls the central station**: it subscribes to System State
-and exposes it as HA sensors + binary sensors, ships the station-wide
-central-controller controls (a track-power switch and an emergency-stop button;
-see "Central controller controls" above), exposes user-configured turnouts
-as switch entities (see "Turnouts" above), and exposes user-configured locos as
-drive entities — a speed number, a direction switch, and an E-Stop button per
-loco — plus user-configured loco **functions** (F0–F31) as switches or
-momentary buttons (see "Locos" above). CV programming stays out of scope, though
-the design leaves room for it later (see ADR-0001, the symmetric I/O seam, and
-ADR-0003).
+The integration **monitors and controls** one Z21: System State as sensors and
+binary sensors, the station-wide central-controller controls (track-power
+switch, emergency-stop button), user-configured turnouts as switches, and up to
+16 user-configured locos — each with a speed number, a direction switch, an
+E-Stop button, and its configured functions (F0–F31) as switches or momentary
+buttons. **CV programming** is out of scope, though the design leaves room for
+it (see ADR-0001, the symmetric I/O seam, and ADR-0003).
 
-Fixed behaviours (not user-configurable in v1): keepalive interval **30s**,
-staleness window **2.5× keepalive (~75s)**, UDP port **21105**. Turnouts are
-managed through an options flow; the connection itself is not reconfigurable.
+Fixed behaviours (not user-configurable): keepalive interval **30s**, staleness
+window **2.5× keepalive (~75s)**, UDP port **21105**. Turnouts and locos are
+managed through the options flow; the connection itself is not reconfigurable.

@@ -15,79 +15,56 @@
 
 A [Home Assistant](https://www.home-assistant.io/) custom integration for
 [Roco/Fleischmann **Z21**-compatible](https://www.z21.eu/) digital command
-stations (e.g. ML-Train MZSpro). The integration is a **client** of exactly one
-Z21, speaking the binary **Z21 LAN protocol** over UDP port 21105.
+stations (e.g. ML-Train MZSpro). It talks to one Z21 over the binary **Z21 LAN
+protocol** (UDP port 21105), with local push updates and no cloud or extra
+dependencies.
 
-## Status
+## Features
 
-**v1 monitors and controls the central station** (see [`CONTEXT.md`](CONTEXT.md)):
-it subscribes to the command station's **System State** and exposes it as HA
-sensors and binary sensors, and ships the station-wide central-controller
-controls — a track-power switch and an emergency-stop button. It also exposes
-user-configured **turnouts** (Weichen) as switch entities. Finer-grained control
-(loco drive, CV programming) does not ship in v1, though the design leaves room
-for it later (see [ADR-0001](docs/adr/0001-symmetric-io-seam.md); control
-feedback is covered by
-[ADR-0002](docs/adr/0002-control-feedback-via-system-state.md)).
+- **Station monitoring**: track and programming current, temperature, supply
+  and track voltage, plus the station's state flags (track power, emergency stop,
+  short circuit, over-temperature, power lost, programming mode).
+- **Station controls**: a track-power switch and a station-wide emergency stop.
+- **Turnouts (Weichen)**: throw turnouts by function address, with live
+  position feedback.
+- **Locos**: up to 16 DCC locos, each with speed, direction, a per-loco
+  emergency stop, and configurable decoder functions (F0–F31) as switches or
+  momentary buttons.
+- **Live feedback**: every entity follows what the Z21 reports, so changes
+  made from a multiMaus, the Z21 app or another controller show up in Home
+  Assistant too.
+- **Availability**: if the Z21 goes quiet, entities turn `unavailable` instead
+  of holding stale values, and the integration re-subscribes once the station
+  is back.
 
-### What exists today
+UI available in English and German.
 
-| Layer | Module | State |
-| --- | --- | --- |
-| Pure protocol codec | `custom_components/z21/protocol.py` | ✅ Message builders + length-driven datagram parser. No `asyncio`, no socket, no HA imports. |
-| Async UDP client | `custom_components/z21/client.py` | ✅ `asyncio.DatagramProtocol` endpoint wrapping the codec; `connect`/`send`/`subscribe`/`close`. Still HA-agnostic. |
-| HA integration (config flow, coordinator, entities) | `custom_components/z21/` | ✅ UI config flow, DataUpdateCoordinator, and `sensor` / `binary_sensor` / `switch` / `button` platforms. |
+## Installation
 
-### Entities exposed
+The integration is distributed as a **HACS custom repository** (it is not in
+the default HACS store). Requires Home Assistant **2026.8.0** or newer.
 
-Once configured, the integration subscribes to the command station's **System
-State** broadcast (`local_push`) and exposes it as:
+1. In Home Assistant, open **HACS → ⋮ (top-right) → Custom repositories**.
+2. Add `https://github.com/Xiphiass/hass-z21-control` with category
+   **Integration**.
+3. Install **Z21** from HACS, then **restart Home Assistant**.
+4. Go to **Settings → Devices & services → Add integration**, search for
+   **Z21**, and enter the command station's IP address (the port is fixed at
+   21105).
 
-**Sensors** (electrical telemetry)
+The integration checks that the Z21 answers before creating the entry, and
+uses the station's serial number as its identity, so a changed IP address won't
+create a duplicate.
 
-| Entity | Description |
-| --- | --- |
-| Main current | Current on the main track. |
-| Filtered main current | Smoothed main-track current. |
-| Programming current | Current on the programming track. |
-| Temperature | Command station internal temperature. |
-| Supply voltage | Input supply voltage. |
-| Track voltage | Voltage on the main track. |
+## Configuration
 
-**Binary sensors** (Central State flags)
-
-| Entity | On when |
-| --- | --- |
-| Track voltage off | Track power is switched off. |
-| Emergency stop | An emergency stop is active. |
-| Short circuit | A short circuit is detected. |
-| Over temperature | The command station is over temperature. |
-| Power lost | The command station lost power. |
-| Programming mode | The command station is in programming mode. |
-| Locos in motion | At least one configured loco reports a speed above 0 (only present when locos are configured). |
-
-**Controls** (central-controller commands)
-
-| Entity | Type | Action |
-| --- | --- | --- |
-| Track power | `switch` | Turns track power on/off (on also clears an active emergency stop and programming mode). Reflects the live track-voltage state. |
-| Emergency stop | `button` | Halts all locomotives while leaving track voltage on. |
-| Turnout (per configured turnout) | `switch` | Throws a turnout between its two outputs. `on` drives output 2 and `off` output 1 by default (invertible per turnout). Reflects the last reported position. |
-| Loco function, type *switch* (per configured function) | `switch` | Latches a decoder function (F0–F31, e.g. lights) on/off. Reflects the function state the Z21 reports. |
-| Loco function, type *button* (per configured function) | `button` | Momentary: switches the function on and, after ~1 s, off again (e.g. horn, coupler). |
-
-Loco functions are configured per loco under **Configure → Manage locos →
-Manage loco functions**, each with a **name**, a **function number** (`0`–`31`,
-`0` = F0) and a **type** (switch or button).
+The Z21 has no roster to query, so turnouts and locos are added by hand under
+**Settings → Devices & services → Z21 → Configure**. The menu lets you manage
+turnouts and locos; choose **Save and reload** to apply your changes.
 
 ### Turnouts
 
-Turnouts (Weichen) are **not** auto-discovered — the Z21 has no turnout
-inventory to query. You add each one yourself, by its **function address**
-(FAdr), and the integration creates a `switch` entity for it.
-
-**Configure them** under **Settings → Devices & services → Z21 → Configure**,
-which opens a menu to add, edit, and delete turnouts. Each turnout has:
+Each turnout has:
 
 | Field | Meaning |
 | --- | --- |
@@ -95,103 +72,130 @@ which opens a menu to add, edit, and delete turnouts. Each turnout has:
 | **Function address (FAdr)** | The Z21 turnout address, `0`–`65534`. FAdr `0` is turnout #1 on a Roco multiMaus (the addressing is zero-based). |
 | **Inverted** | Swaps the on/off ↔ output mapping. Off by default. |
 
-The Z21 protocol only speaks of "output 1" and "output 2" — which physical
-direction each drives depends on how the turnout decoder is wired, something the
-command station can't know. By default `off` = output 1 and `on` = output 2. If
-your decoder is wired backwards (so "off" throws the turnout the wrong way), or
-you're driving an **accessory/lights decoder** on a turnout address and want the
-logical states swapped, enable **Inverted** — no rewiring needed.
-
-Turnout switches are **non-optimistic**: after a throw the entity waits for the
-Z21 to report the new position (`LAN_X_TURNOUT_INFO`), so the state also reflects
-throws made from other input devices (e.g. a multiMaus). A turnout shows as
-*unknown* until its first position is reported.
+The Z21 protocol only knows "output 1" and "output 2"; which physical direction
+each one drives depends on how the decoder is wired. By default `off` = output 1
+and `on` = output 2. If a turnout throws the wrong way, or you're driving an
+accessory/lights decoder on a turnout address, enable **Inverted** instead of
+rewiring.
 
 > **Example.** Add a turnout named `Yard entry` at FAdr `12`. It appears as
 > `switch.z21_<host>_yard_entry`. Turning it **on** throws it to output 2 and
-> **off** back to output 1. If the physical directions come out reversed, edit
-> the turnout and toggle **Inverted**.
+> **off** back to output 1.
 
-## Installation (HACS custom repository)
+### Locos
 
-This integration is distributed as a **HACS custom repository** (it is not in
-the default HACS store).
+Each loco has:
 
-1. In Home Assistant, open **HACS → ⋮ (top-right) → Custom repositories**.
-2. Add the repository URL `https://github.com/Xiphiass/hass-z21-control` with
-   category **Integration**.
-3. Install **Z21** from HACS, then **restart Home Assistant**.
-4. Go to **Settings → Devices & services → Add integration**, search for
-   **Z21**, and enter the command station's host IP (port is fixed at 21105).
+| Field | Meaning |
+| --- | --- |
+| **Name** | Name of the loco's device in Home Assistant. |
+| **DCC address** | The loco address, `1`–`10239`. |
+| **Speed steps** | The decoder's speed-step resolution: `14`, `28` or `128` (default; right for modern decoders). |
 
-Requires Home Assistant **2026.8.0** or newer.
+At most **16 locos** can be configured: the Z21 only sends live updates for 16
+loco addresses per client. Locos are DCC only.
 
-## Architecture
+### Loco functions
 
-The code is layered so each layer is independently testable and the reusable
-parts carry no Home Assistant dependency:
+Under **Manage locos → Manage loco functions**, pick a loco and add its decoder
+functions. Each function has a **name**, a **function number** (`0`–`31`, `0` =
+F0, usually the lights) and a **type**:
+
+- **Switch**: latches the function on/off (lights, sound, smoke).
+- **Button**: switches the function on briefly, about 1 s (horn, coupler).
+
+## Entities
+
+### Z21 device
+
+**Sensors**
+
+| Entity | Unit |
+| --- | --- |
+| Main track current | mA |
+| Filtered main track current | mA |
+| Programming track current | mA |
+| Internal temperature | °C |
+| Supply voltage | mV |
+| Track voltage | mV |
+
+**Binary sensors**
+
+| Entity | On when |
+| --- | --- |
+| Track voltage off | Track power is switched off. |
+| Emergency stop | An emergency stop is active. |
+| Short circuit | A short circuit is detected. |
+| Over-temperature | The command station is over temperature. |
+| Power lost | The command station lost power. |
+| Programming mode | The command station is in programming mode (diagnostic). |
+| Locos in motion | Any configured loco reports a speed above 0 (only when locos are configured). |
+
+**Controls**
+
+| Entity | Type | Action |
+| --- | --- | --- |
+| Track power | `switch` | Turns track power on/off. Turning it on also clears an emergency stop and programming mode. |
+| Emergency stop | `button` | Stops all locomotives immediately while leaving track power on. |
+| *Turnout* (one per configured turnout) | `switch` | Throws the turnout between its two outputs. Shows *unknown* until the Z21 first reports its position. |
+
+### Loco devices
+
+Each configured loco is its own device, linked to the Z21 device:
+
+| Entity | Type | Action |
+| --- | --- | --- |
+| Speed | `number` | Speed in raw decoder steps (0–14, 0–28 or 0–126, per the loco's speed steps). 0 is a normal stop. |
+| Direction | `switch` | On = forward, off = reverse. |
+| Emergency stop | `button` | Stops this loco immediately. |
+| *Function* (one per configured function) | `switch` or `button` | Toggles or pulses the decoder function. |
+
+Switches and speed are **non-optimistic**: after a command, the entity waits for
+the Z21 to confirm the new state rather than assuming it.
+
+## How it works
+
+The integration logs on to the Z21, subscribes to its System State and
+driving/switching broadcasts, and sends a keepalive every 30 s that also
+re-asserts the subscriptions and re-polls each loco. If nothing arrives from the
+Z21 for about 75 s, all entities go `unavailable`. On unload and on Home
+Assistant shutdown it logs off from the Z21 cleanly.
+
+The code is split into three layers, the lower two with no Home Assistant
+dependency:
 
 ```
-protocol.py   pure codec — bytes <-> decoded datasets (no I/O)
+protocol.py   pure codec: bytes <-> decoded datasets (no I/O)
     ▲
-client.py     async UDP transport — one endpoint, symmetric send/receive seam
+client.py     async UDP client: one endpoint, send(header, payload) + header-keyed receive dispatch
     ▲
-HA layer      config flow + DataUpdateCoordinator + sensor/binary_sensor/switch/button platforms
+HA layer      config/options flow, coordinator, sensor/binary_sensor/switch/button/number platforms
 ```
 
-The client realizes the **symmetric I/O seam** of
-[ADR-0001](docs/adr/0001-symmetric-io-seam.md):
-
-- **Send path** — a general `send(header, payload)` primitive over the single UDP
-  endpoint. Outbound messages — monitor requests (`request_serial_number`,
-  `request_hwinfo`, `request_systemstate`, `set_broadcastflags`, `logoff`) and
-  the shipped controls (`set_track_power_on`, `set_track_power_off`,
-  `emergency_stop`) — are all thin wrappers on it; further control commands are
-  new wrappers on the same seam.
-- **Receive path** — inbound datagrams are split (`protocol.split_datasets`),
-  decoded by `Header` through `protocol.RECEIVE_DISPATCH`, and dispatched to
-  handlers registered via `subscribe(handler)`. Adding a control-related inbound
-  message later is a new dispatch entry plus a handler — no transport rework.
-
-### `Z21Client` in brief
-
-```python
-from custom_components.z21.client import Z21Client
-
-client = Z21Client("192.0.2.10")            # host only; port defaults to 21105
-serial, hwinfo = await client.connect()      # round-trips serial + hwinfo with
-                                             # bounded retries + backoff
-unsubscribe = client.subscribe(lambda header, decoded: ...)
-client.request_systemstate()                 # via the send(header, payload) seam
-await client.close()                         # sends LAN_LOGOFF, tears down
-```
-
-`connect` correlates responses by header (the Z21 has no request IDs) using
-one-shot futures, and re-sends its requests on each attempt so a single dropped
-datagram against a reachable Z21 is recovered on retry. It raises `Z21Timeout`
-once all attempts are exhausted.
+See [ADR-0001](docs/adr/0001-symmetric-io-seam.md) for the I/O seam,
+[ADR-0002](docs/adr/0002-control-feedback-via-system-state.md) for control
+feedback and
+[ADR-0003](docs/adr/0003-loco-drive-non-optimistic-subscription.md) for loco
+drive. The codec follows the Z21 LAN protocol specification (v1.13); docstrings
+cite its section numbers.
 
 ## Development
 
-Requires Python ≥ 3.11. The runtime has **zero dependencies** (pure-Python codec;
-transport uses stdlib `asyncio`). The only dev dependency is `pytest`.
+Requires Python ≥ 3.14.2. The runtime has **zero dependencies**.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install ".[dev]"          # plain install, not -e (see CLAUDE.md)
 python -m pytest tests/ -q
 ```
 
-Tests run entirely against a **faked transport** — no physical Z21 and no real
-socket — so the full suite is fast and hermetic.
+Tests run against a **faked transport** (no physical Z21, no real socket), so
+the suite is fast and hermetic.
 
 ## Documentation
 
-- [`CONTEXT.md`](CONTEXT.md) — glossary / shared language for the domain.
-- [`docs/adr/`](docs/adr/) — architecture decision records.
-
-The codec implements the Z21 LAN protocol specification (v1.13); docstrings cite
-its section numbers.
+- [`CONTEXT.md`](CONTEXT.md): glossary and shared language for the domain.
+- [`docs/adr/`](docs/adr/): architecture decision records.
 
 ## License
 

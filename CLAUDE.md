@@ -5,10 +5,11 @@ Guidance for AI agents working in this repo. Human-facing overview lives in
 
 A Home Assistant custom integration for Roco/Fleischmann **Z21**-compatible
 command stations, speaking the Z21 LAN protocol over UDP port 21105. It monitors
-System State (→ sensors/binary sensors) and ships the station-wide
-central-controller controls — a track-power switch and an emergency-stop button —
-plus user-configured turnouts (Weichen) as switch entities. Per-loco and CV
-control remain out of scope.
+System State (→ sensors/binary sensors), ships the station-wide
+central-controller controls (a track-power switch and an emergency-stop button),
+and exposes user-configured turnouts (Weichen) as switches and up to 16
+user-configured locos (speed, direction, E-Stop, F0–F31 functions) as their own
+Devices. CV programming remains out of scope.
 
 ## Workflow
 
@@ -27,8 +28,8 @@ Assistant dependency** — keep it that way:
   `asyncio.DatagramProtocol` endpoint wrapping the codec; `connect` / `send` /
   `subscribe` / `close`. Still HA-agnostic (no `socket`/`homeassistant` imports —
   a test enforces this; `asyncio` is allowed).
-- HA integration — **config flow, coordinator, and entity platforms**
-  (`sensor` / `binary_sensor` / `switch` / `button`). Carries the HA dependency;
+- HA integration — **config + options flow, coordinator, and entity platforms**
+  (`sensor` / `binary_sensor` / `switch` / `button` / `number`). Carries the HA dependency;
   builds on the two layers below.
 
 Both layers honor the **symmetric I/O seam** of
@@ -48,7 +49,8 @@ new builder and/or a new dispatch entry + decoder — not a transport rewrite.
 - **Codec changes stay additive** and behavior-preserving: existing
   `tests/test_protocol.py` must stay green.
 - Wire-format work follows the Z21 LAN protocol spec (v1.13) and cites section
-  numbers in docstrings, as the existing code does.
+  numbers in docstrings, as the existing code does. The spec is checked in as
+  `z21-lan-protokoll-en.pdf`.
 - Use the vocabulary defined in [`CONTEXT.md`](CONTEXT.md); flag conflicts with
   an ADR rather than silently overriding it.
 
@@ -72,6 +74,13 @@ That HA floor requires Python ≥3.14.2, so the code targets **3.14**; avoid
 HA-version-specific APIs newer than the floor. The floor was raised from 2026.1
 for `DeviceInfo.via_device_id` (2026.8), which replaces the deprecated
 `via_device` (removed in 2027.8) for nesting loco Devices under the station.
+
+## Docs
+
+Keep [`README.md`](README.md) (user-facing: features, setup, entities) and
+[`CONTEXT.md`](CONTEXT.md) (glossary) describing the **current** state — no
+version history or "v1" framing; that belongs in git history and ADRs. Update
+both when a feature changes what users see.
 
 ## CI
 
