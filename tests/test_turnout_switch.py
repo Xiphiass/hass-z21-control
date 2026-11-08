@@ -132,6 +132,7 @@ def _install_client(monkeypatch, *, responder) -> list[_FakeTransport]:
 
     monkeypatch.setattr("custom_components.z21.Z21Client", _FakeClient)
     monkeypatch.setattr("custom_components.z21.coordinator._STATE_TIMEOUT", 0.2)
+    monkeypatch.setattr("custom_components.z21.coordinator.POLL_REPLY_TIMEOUT", 0.05)
     return transports
 
 
@@ -483,12 +484,15 @@ async def test_turnout_initial_position_poll_on_setup(hass: HomeAssistant, monke
 
     monkeypatch.setattr("custom_components.z21.Z21Client", _FakeClient)
     monkeypatch.setattr("custom_components.z21.coordinator._STATE_TIMEOUT", 0.2)
+    monkeypatch.setattr("custom_components.z21.coordinator.POLL_REPLY_TIMEOUT", 0.05)
 
     entry = _mock_entry()
     entry.add_to_hass(hass)
 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
+    # Polls go out one at a time; with no reply each waits out its timeout.
+    await hass.data[DOMAIN][entry.entry_id]._discovery_task
 
     # Check that a LAN_X_GET_TURNOUT_INFO request was sent for each configured turnout.
     # The wire format is: dataset header HDR_X (0x40), X-header 0x43, then fadr bytes.

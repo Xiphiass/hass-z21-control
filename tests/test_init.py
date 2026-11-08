@@ -118,6 +118,7 @@ def _install_client(monkeypatch, *, responder) -> list[_FakeTransport]:
     # on its first attempt; only the System State wait needs shrinking. Shrink
     # the staleness window too so the liveness tests can sleep past it (issue #8).
     monkeypatch.setattr("custom_components.z21.coordinator._STATE_TIMEOUT", 0.2)
+    monkeypatch.setattr("custom_components.z21.coordinator.POLL_REPLY_TIMEOUT", 0.05)
     monkeypatch.setattr("custom_components.z21.coordinator.STALENESS_WINDOW", 0.5)
     return transports
 
@@ -228,6 +229,29 @@ async def test_unload_closes_client(hass: HomeAssistant, monkeypatch) -> None:
     assert entry.state is ConfigEntryState.NOT_LOADED
     assert transports[0].closed
     # A clean disconnect sends LAN_LOGOFF before tearing the socket down.
+    assert protocol.build_frame(protocol.HDR_LOGOFF) in transports[0].sent
+
+
+async def test_ha_stop_logs_off_from_z21(hass: HomeAssistant, monkeypatch) -> None:
+    """Stopping Home Assistant sends LAN_LOGOFF and closes the socket.
+
+    HA does not unload config entries on shutdown, so without this the Z21
+    keeps the old client (same IP, old port) registered across a restart and
+    the restarted integration's loco feedback is lost (spec 1.1, 2.2).
+    """
+    transports = _install_client(
+        monkeypatch, responder=_responder(answer_state=True)
+    )
+    entry = _mock_entry()
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert protocol.build_frame(protocol.HDR_LOGOFF) not in transports[0].sent
+
+    await hass.async_stop()
+
+    assert transports[0].closed
     assert protocol.build_frame(protocol.HDR_LOGOFF) in transports[0].sent
 
 

@@ -117,6 +117,7 @@ def _install_client(monkeypatch) -> list[_FakeTransport]:
 
     monkeypatch.setattr("custom_components.z21.Z21Client", _FakeClient)
     monkeypatch.setattr("custom_components.z21.coordinator._STATE_TIMEOUT", 0.2)
+    monkeypatch.setattr("custom_components.z21.coordinator.POLL_REPLY_TIMEOUT", 0.05)
     return transports
 
 

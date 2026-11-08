@@ -26,7 +26,17 @@ from custom_components.z21.protocol import (
 def mock_client():
     client = MagicMock()
     client.connect = AsyncMock()
+    # Polls return the client's reply future; resolve it as a live Z21 would.
+    client.request_turnout_info.side_effect = _answered
+    client.request_loco_info.side_effect = _answered
     return client
+
+
+def _answered(*_args):
+    """A reply future that is already resolved, as from a responsive Z21."""
+    fut = asyncio.get_running_loop().create_future()
+    fut.set_result(None)
+    return fut
 
 
 def _make_coordinator(mock_client, locos=None, turnouts=None):
@@ -91,7 +101,11 @@ def test_stale_recovery_resubscribes_locos(mock_client):
     coordinator._last_rx = 0.0
     coordinator._stale = True
 
-    coordinator._handle_message(HDR_SYSTEMSTATE_DATACHANGED, _system_state())
+    async def recover():
+        coordinator._handle_message(HDR_SYSTEMSTATE_DATACHANGED, _system_state())
+        await coordinator._discovery_task
+
+    asyncio.run(recover())
 
     assert _requested(mock_client) == [3, 7]
 

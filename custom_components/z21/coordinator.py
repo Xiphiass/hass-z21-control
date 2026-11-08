@@ -9,9 +9,13 @@ the Z21's push model into a Home Assistant ``DataUpdateCoordinator``:
   configured turnout so their states are known without waiting for the first
   throw. Every configured loco is likewise polled **and subscribed** with
   ``LAN_X_GET_LOCO_INFO`` (spec 4.1) so its ``LAN_X_LOCO_INFO`` feedback arrives
-  (ADR-0003).
-- A pushed ``LAN_SYSTEMSTATE_DATACHANGED`` (spec 2.18) is fed straight to entities
-  via ``async_set_updated_data``.
+  (ADR-0003). These polls go out **one at a time**, each awaiting its reply:
+  the Z21 drops a ``LAN_X`` request that arrives while it is still answering
+  the previous one, so a burst left every loco but the first without state.
+- A pushed ``LAN_SYSTEMSTATE_DATACHANGED`` (spec 2.18) is fed straight to
+  entities — deliberately *not* via ``async_set_updated_data``, which would
+  reset the keepalive timer on every push (the Z21 pushes every few seconds)
+  so the keepalive never ran.
 - The 30 s poll (``LAN_SYSTEMSTATE_GETDATA``, spec 2.19) doubles as a keepalive
   and a staleness detector: its reply *is* a ``LAN_SYSTEMSTATE_DATACHANGED``, so
   it shares the receive path. Each poll also re-sends the broadcast flags and
@@ -43,6 +47,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util.async_ import create_eager_task
 
 from . import protocol
 from .client import TURNOUT_DEACTIVATE_DELAY, Z21Client, Z21Timeout
@@ -71,6 +76,13 @@ STALENESS_WINDOW = 2.5 * KEEPALIVE_INTERVAL
 # committed the new position and doesn't answer with the stale one. Module-level
 # so tests can shrink it.
 TURNOUT_SETTLE_DELAY = TURNOUT_DEACTIVATE_DELAY + 0.1
+
+# Turnout and loco polls are sent one at a time, each awaiting its reply for at
+# most this long. Real hardware takes ~0.6 s per reply and silently drops a
+# LAN_X request sent while the previous one is still being answered, so a
+# back-to-back burst left every loco but the first without state. Module-level
+# so tests can shrink it.
+POLL_REPLY_TIMEOUT = 1.5
 
 
 class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
@@ -106,6 +118,10 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         # direction are one coupled wire command, so every drive command is
         # composed from this (ADR-0003); absent until the first feedback.
         self._loco_states: dict[int, protocol.LocoInfo] = {}
+        # Serialises every turnout/loco poll: one LAN_X request in flight.
+        self._poll_lock = asyncio.Lock()
+        # The running setup/recovery discovery pass, so passes never overlap.
+        self._discovery_task: asyncio.Task | None = None
 
     async def async_setup(self) -> None:
         """Connect, subscribe to System State broadcasts, and start listening.
@@ -121,8 +137,7 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
             ) from err
         self._set_broadcastflags()
         self._unsub = self.client.subscribe(self._handle_message)
-        self._discover_turnouts()
-        self._discover_locos()
+        self._start_discovery()
 
     def _set_broadcastflags(self) -> None:
         """Send LAN_SET_BROADCASTFLAGS (2.16): System State + driving/switching."""
@@ -131,27 +146,73 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
             | protocol.BROADCAST_FLAG_DRIVING_SWITCHING
         )
 
-    def _discover_turnouts(self) -> None:
-        """Poll the position of every configured turnout (LAN_X_GET_TURNOUT_INFO).
+    def _start_discovery(self) -> None:
+        """Poll every configured turnout, then every loco, in the background.
 
         Called when the Z21 becomes available — on setup and again on recovery
-        from a stale/silent period, since the Z21 forgets its state model on
-        logoff. Each reply arrives as a ``LAN_X_TURNOUT_INFO`` and updates
-        :attr:`turnout_positions` via :meth:`_handle_message`.
+        from a stale/silent period, since the Z21 forgets its state model and
+        per-client subscriptions on logoff. Replies arrive as
+        ``LAN_X_TURNOUT_INFO`` / ``LAN_X_LOCO_INFO`` and update
+        :attr:`turnout_positions` / :attr:`loco_states` via
+        :meth:`_handle_message`. A pass that is still running is not restarted.
         """
-        for turnout in self.config_entry.options.get(CONF_TURNOUTS, []):
-            self.client.request_turnout_info(turnout[CONF_TURNOUT_FADR])
+        if self._discovery_task is not None and not self._discovery_task.done():
+            return
+        self._discovery_task = create_eager_task(
+            self._async_discover(), name="z21 discovery"
+        )
 
-    def _discover_locos(self) -> None:
+    async def _async_discover(self) -> None:
+        """Poll every configured turnout (5.1), then every configured loco (4.1)."""
+        fadrs = [
+            turnout[CONF_TURNOUT_FADR]
+            for turnout in self.config_entry.options.get(CONF_TURNOUTS, [])
+        ]
+        await self._async_poll_each("turnout", self.client.request_turnout_info, fadrs)
+        await self._async_poll_locos()
+
+    async def _async_poll_locos(self) -> None:
         """Poll and subscribe every configured loco (LAN_X_GET_LOCO_INFO, 4.1).
 
-        Called alongside :meth:`_discover_turnouts` — on setup and on recovery
-        from silence, since the Z21 drops its per-client subscriptions on logoff.
+        Run by every keepalive and by the setup/recovery discovery pass.
         Replies and later changes arrive as ``LAN_X_LOCO_INFO`` and update
         :attr:`loco_states` via :meth:`_handle_message`.
         """
-        for loco in self.config_entry.options.get(CONF_LOCOS, []):
-            self.client.request_loco_info(loco[CONF_LOCO_ADDRESS])
+        addresses = [
+            loco[CONF_LOCO_ADDRESS]
+            for loco in self.config_entry.options.get(CONF_LOCOS, [])
+        ]
+        if addresses:
+            _LOGGER.debug("Polling/subscribing locos %s", addresses)
+            await self._async_poll_each(
+                "loco", self.client.request_loco_info, addresses
+            )
+
+    async def _async_poll_each(
+        self,
+        kind: str,
+        request: Callable[[int], asyncio.Future],
+        keys: list[int],
+    ) -> None:
+        """Send ``request(key)`` for each key, one request in flight at a time.
+
+        Each request awaits its reply (the client's per-address future) for up
+        to :data:`POLL_REPLY_TIMEOUT` before the next is sent: the Z21 drops a
+        LAN_X request that arrives while it is still answering the previous one.
+        The lock is shared by every pass (discovery and keepalive), so passes
+        that overlap still never put two requests in flight. A missing reply is
+        logged and skipped; the next keepalive retries.
+        """
+        for key in keys:
+            async with self._poll_lock:
+                try:
+                    reply = request(key)
+                except RuntimeError:
+                    return  # endpoint closed (unload/shutdown) mid-pass
+                try:
+                    await asyncio.wait_for(asyncio.shield(reply), POLL_REPLY_TIMEOUT)
+                except (asyncio.TimeoutError, TimeoutError):
+                    _LOGGER.debug("No reply from Z21 to %s poll for %s", kind, key)
 
     def _handle_message(self, header: int, decoded: object) -> None:
         """Route a decoded dataset to System State, turnout positions, or loco state."""
@@ -161,14 +222,18 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
             self._last_rx = self.hass.loop.time()
             if self._stale:
                 self._set_broadcastflags()
-                self._discover_turnouts()
-                self._discover_locos()
+                self._start_discovery()
                 self._stale = False
             waiter = self._waiter
             if waiter is not None and not waiter.done():
                 waiter.set_result(decoded)
             else:
-                self.async_set_updated_data(decoded)
+                # Not async_set_updated_data: that reschedules the refresh, and
+                # the Z21 pushes System State every few seconds, so the
+                # keepalive (and its loco re-poll) would never run.
+                self.data = decoded
+                self.last_update_success = True
+                self.async_update_listeners()
         elif header == protocol.HDR_TURNOUT_INFO and isinstance(
             decoded, protocol.TurnoutInfo
         ):
@@ -177,6 +242,7 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         elif header == protocol.HDR_LOCO_INFO and isinstance(
             decoded, protocol.LocoInfo
         ):
+            _LOGGER.debug("Loco info received: %s", decoded)
             self._loco_states[decoded.address] = decoded
             self.async_update_listeners()
 
@@ -273,8 +339,8 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
         self._waiter = waiter
         try:
             self._set_broadcastflags()
-            self._discover_locos()
             self.client.request_systemstate()
+            await self._async_poll_locos()
             return await asyncio.wait_for(waiter, _STATE_TIMEOUT)
         except (asyncio.TimeoutError, TimeoutError) as err:
             # A missed poll is tolerated while a datagram arrived within the
@@ -291,6 +357,9 @@ class Z21Coordinator(DataUpdateCoordinator[protocol.SystemState]):
 
     async def async_shutdown_client(self) -> None:
         """Unsubscribe and close the live client (on unload)."""
+        if self._discovery_task is not None:
+            self._discovery_task.cancel()
+            self._discovery_task = None
         if self._unsub is not None:
             self._unsub()
             self._unsub = None

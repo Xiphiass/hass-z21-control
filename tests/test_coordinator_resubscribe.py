@@ -85,6 +85,9 @@ class FakeZ21:
         self.subscribed.add(address)
         self.locos.setdefault(address, 0)
         self._push_loco(address)
+        fut = asyncio.get_running_loop().create_future()
+        fut.set_result(None)
+        return fut
 
     def request_turnout_info(self, fadr):
         pass
@@ -154,3 +157,76 @@ def test_keepalive_corrects_state_after_lost_loco_info():
         return coordinator.loco_states[3].speed
 
     assert asyncio.run(scenario()) == 0
+
+
+class SlowZ21(FakeZ21):
+    """A Z21 that answers loco polls late and drops one sent while it is busy.
+
+    Real hardware takes ~0.6 s per ``LAN_X_LOCO_INFO`` reply and silently
+    ignored the second of two back-to-back ``LAN_X_GET_LOCO_INFO`` requests
+    (only the first loco ever got its state after a restart).
+    """
+
+    REPLY_DELAY = 0.02
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.busy = False
+
+    def request_loco_info(self, address):
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        if self.busy:
+            return fut  # dropped: never answered
+        self.busy = True
+        self.subscribed.add(address)
+        self.locos.setdefault(address, 0)
+
+        def _reply() -> None:
+            self.busy = False
+            self._push_loco(address)
+            fut.set_result(None)
+
+        loop.call_later(self.REPLY_DELAY, _reply)
+        return fut
+
+
+def test_keepalive_polls_locos_one_at_a_time(monkeypatch):
+    """Every configured loco gets its state, even from a Z21 that drops bursts."""
+    monkeypatch.setattr("custom_components.z21.coordinator.POLL_REPLY_TIMEOUT", 0.2)
+
+    async def scenario():
+        z21 = SlowZ21()
+        coordinator = _make_coordinator(z21, asyncio.get_running_loop())
+        coordinator.config_entry.options["locos"] = [
+            {"id": "a", "name": "Stainz", "address": 11, "speed_steps": 128},
+            {"id": "b", "name": "BR 203", "address": 12, "speed_steps": 128},
+        ]
+        z21.locos[12] = 40  # BR 203 is running when HA comes up
+        await coordinator.async_setup()
+        await coordinator._async_update_data()
+        return coordinator.loco_states
+
+    states = asyncio.run(scenario())
+    assert set(states) == {11, 12}
+    assert states[12].speed == 40
+
+
+def test_system_state_push_does_not_postpone_keepalive():
+    """A pushed System State must not reset the keepalive timer.
+
+    The Z21 pushes LAN_SYSTEMSTATE_DATACHANGED every few seconds. Routing it
+    through ``async_set_updated_data`` rescheduled the 30 s refresh on every
+    push, so the keepalive (and its loco re-poll) never ran.
+    """
+    async def scenario():
+        z21 = FakeZ21()
+        coordinator = _make_coordinator(z21, asyncio.get_running_loop())
+        await coordinator.async_setup()
+        coordinator._handle_message(HDR_SYSTEMSTATE_DATACHANGED, _system_state())
+        return coordinator
+
+    coordinator = asyncio.run(scenario())
+    coordinator.async_set_updated_data.assert_not_called()
+    assert coordinator.data == _system_state()
+    coordinator.async_update_listeners.assert_called()
